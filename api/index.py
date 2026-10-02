@@ -58,6 +58,31 @@ HTML_TEMPLATE = """
             </ul>
         </div>
 
+        <!-- 區塊 0: 資料處理展示 (滿足作業要求 Step 1~5) -->
+        <div class="card border-primary" style="border: 1px solid #b8daff;">
+            <div class="card-header bg-light">📂 0. 資料處理與 Return Matrix 展示 (作業要求 1~5)</div>
+            <div class="card-body">
+                <p class="tooltip-text">已自動讀取 Adjusted Close Price，並使用 <code>ffill().dropna()</code> 處理 Missing Values。以下展示資料前 5 筆與最終的 <strong>Return Matrix</strong>。</p>
+                <div class="row">
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold text-secondary mb-2">Step 2 & 3: 乾淨的價格資料 (Adj Close)</h6>
+                        <div class="table-responsive mb-3">
+                            {{ price_head_table | safe }}
+                        </div>
+                    </div>
+                    <div class="col-lg-6">
+                        <h6 class="fw-bold text-secondary mb-2">Step 4 & 5: Return Matrix (每日報酬率)</h6>
+                        <div class="table-responsive mb-3">
+                            {{ return_matrix_head_table | safe }}
+                        </div>
+                    </div>
+                </div>
+                <div class="alert alert-info py-2 mb-0 text-center" role="alert">
+                    <strong>Return Matrix 資料維度：</strong> {{ matrix_shape }}
+                </div>
+            </div>
+        </div>
+
         <!-- 區塊 1: 報酬與風險分析 -->
         <div class="card">
             <div class="card-header">📊 1. 報酬與風險分析 (Return and Risk)</div>
@@ -125,7 +150,9 @@ def index():
         import numpy as np
         import plotly.express as px
 
-        # 1. 抓取資料
+        # ==========================================
+        # 步驟 1 & 2: 抓取資料與整理日期
+        # ==========================================
         tickers = ['VOO', 'BRK-B', 'JPM', 'NVDA', 'GLD']
         data = yf.download(tickers, start="2018-01-01", end="2024-01-01", progress=False)
         
@@ -134,16 +161,31 @@ def index():
         elif 'Close' in data.columns:
             data = data['Close']
             
-        data = data.ffill().dropna()
+        # ==========================================
+        # 步驟 3: 處理 Missing Values (遺失值處理)
+        # ==========================================
+        clean_price_data = data.ffill().dropna()
 
-        # 2. 計算每日報酬率
-        daily_returns = data.pct_change().dropna()
+        # ==========================================
+        # 步驟 4 & 5: 計算 Return 並建立 Return Matrix
+        # ==========================================
+        daily_returns = clean_price_data.pct_change()
+        return_matrix = daily_returns.dropna()
+
+        # [新增] 將前 5 筆資料轉為 HTML，用於網頁展示
+        table_classes = 'table table-hover table-striped table-bordered'
+        price_head_table = clean_price_data.head().round(2).to_html(classes=table_classes)
+        return_matrix_head_table = return_matrix.head().round(4).to_html(classes=table_classes)
+        matrix_shape = f"{return_matrix.shape[0]} 個交易日, {return_matrix.shape[1]} 種資產"
+
+        # ------------------------------------------
+        # 後續 Part II 分析計算 (Return and Risk)
+        # ------------------------------------------
         trading_days = 252
 
-        # 3. 計算各項 MPT 指標 (轉換成百分比格式以提高直觀性)
-        avg_daily_return = daily_returns.mean()
+        avg_daily_return = return_matrix.mean()
         annualized_return = (1 + avg_daily_return) ** trading_days - 1
-        std_dev = daily_returns.std()
+        std_dev = return_matrix.std()
         annualized_volatility = std_dev * np.sqrt(trading_days)
 
         stats_df = pd.DataFrame({
@@ -153,10 +195,10 @@ def index():
             'Annualized Volatility': annualized_volatility
         }).round(4)
 
-        corr_matrix = daily_returns.corr().round(4)
-        cov_matrix = daily_returns.cov().round(6)
+        corr_matrix = return_matrix.corr().round(4)
+        cov_matrix = return_matrix.cov().round(6)
 
-        # 4. 繪製相關係數熱力圖 (加高圖表、優化顏色)
+        # 繪製相關係數熱力圖
         fig = px.imshow(
             corr_matrix, 
             text_auto=True, 
@@ -172,14 +214,16 @@ def index():
         )
         heatmap_div = fig.to_html(full_html=False, include_plotlyjs='cdn')
 
-        # 5. 轉換表格格式，並加上 Bootstrap 的 CSS class (table-hover table-striped)
-        table_classes = 'table table-hover table-striped table-bordered'
+        # 轉換下方分析表格
         stats_table = stats_df.to_html(classes=table_classes)
         corr_table = corr_matrix.to_html(classes=table_classes)
         cov_table = cov_matrix.to_html(classes=table_classes)
 
         return render_template_string(
             HTML_TEMPLATE,
+            price_head_table=price_head_table,
+            return_matrix_head_table=return_matrix_head_table,
+            matrix_shape=matrix_shape,
             stats_table=stats_table,
             corr_table=corr_table,
             cov_table=cov_table,
