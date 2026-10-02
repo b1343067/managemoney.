@@ -27,7 +27,7 @@ HTML_TEMPLATE = """
         .table tbody td { text-align: center; }
         .badge-ticker { font-size: 1rem; margin: 4px; padding: 8px 12px; font-weight: 500; display: inline-block; }
         .insight-box { background-color: #f8f9fa; border-left: 5px solid #2c3e50; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
-        /* 強制表格不換行並可滾動，避免 10 檔資產擠破版面 */
+        .mvp-box { background-color: #fff3cd; border-left: 5px solid #ffc107; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
         .table-responsive { overflow-x: auto; }
         .text-nowrap td, .text-nowrap th { white-space: nowrap; }
     </style>
@@ -53,44 +53,31 @@ HTML_TEMPLATE = """
 
     <div class="container-fluid px-4 px-lg-5">
         
-        <!-- 商業洞察區塊 (整合 MPT 分析邏輯) -->
+        <!-- Part II 回答問題區塊 -->
         <div class="insight-box shadow-sm">
-            <h5 class="fw-bold" style="color: #2c3e50;">資產關聯性與分散風險洞察</h5>
+            <h5 class="fw-bold" style="color: #2c3e50;">📝 Part II. 投資組合關聯性 (Q1~Q3 作業解答)</h5>
             <ul class="mb-0 mt-3" style="line-height: 1.8;">
-                <li><strong>高連動性與攻擊部位：</strong>VOO、QQQ 與美國大型權值股 (NVDA, JPM) 具備高度正相關，作為推升預期報酬的主力。</li>
-                <li><strong>低連動與防禦部位：</strong>公債 (TLT) 與黃金 (GLD) 與一般股市的連動性極低，在市場波動時能提供強大的下檔保護。</li>
-                <li><strong>跨界分散效益 (Diversification)：</strong>納入房地產 (VNQ)、新興市場 (VWO) 以及防禦性消費股 (PG)，進一步將風險分散至不同資產類別與地理區域，完美實踐 MPT 理論中追求最大化 Diversification Benefit 的核心精神。</li>
+                <li><strong>Q1 高度相關性：</strong>VOO、QQQ 與美國大型權值股 (NVDA, JPM) 具備高度正相關，因為它們是構成大盤的主力。</li>
+                <li><strong>Q2 低度/負相關性：</strong>公債 (TLT) 與黃金 (GLD) 與一般股市的連動性極低，在市場波動時容易呈現低相關甚至負相關。</li>
+                <li><strong>Q3 分散投資效益 (Diversification)：</strong>從 Correlation Matrix 判斷，納入相關係數極低的 TLT、GLD，以及跨市場的 VNQ 與 VWO，能最有效抵銷單一資產的波動，創造最佳的分散投資效益。</li>
             </ul>
         </div>
 
-        <!-- Part I. 價格資料與 Return Matrix 展示區塊 -->
-        <div class="card border-info" style="border: 1px solid #17a2b8;">
-            <div class="card-header bg-light text-info border-info">
-                 Part I. 資料蒐集與處理 (Price & Return Matrix)
-            </div>
-            <div class="card-body">
-                <p class="text-muted small mb-3">已透過 Python 讀取 5 年以上歷史資料 (Adjusted Close Price)，並使用 <code>ffill().dropna()</code> 完成 Missing Values 處理。以下展示整理後的「歷史價格表」與由價格計算而來的「每日報酬率矩陣 (Return Matrix)」前 5 筆資料。</p>
-                
-                <h6 class="fw-bold text-secondary mt-4 mb-2">Step 1~3: 歷史價格表 (Adjusted Close Price)</h6>
-                <div class="table-responsive mb-4">
-                    {{ price_head_table | safe }}
-                </div>
-
-                <h6 class="fw-bold text-secondary mt-4 mb-2">Step 4~5: 每日報酬率矩陣 (Return Matrix)</h6>
-                <div class="table-responsive mb-2">
-                    {{ return_matrix_head_table | safe }}
-                </div>
-            </div>
+        <!-- [明確標示] MVP 最終解答區塊 -->
+        <div class="mvp-box shadow-sm">
+            <h5 class="fw-bold text-dark">🏆 最小變異投資組合 (Minimum Variance Portfolio, MVP) 結論</h5>
+            <p class="mt-2 mb-0" style="line-height: 1.6; color: #555;">
+                透過 Python 進行蒙地卡羅模擬，建構出下方的「投資組合機會集合 (Opportunity Set)」。在所有可能的權重配置中，系統找出了風險（年化波動率）最低的 <strong>MVP (紅色星號)</strong>。<br>
+                該 MVP 的預期年化報酬率為 <strong class="text-success">{{ mvp_return }}</strong>，年化風險降至極低的 <strong class="text-danger">{{ mvp_volatility }}</strong>。詳細的最佳權重配置請見下方圖表右側面板。
+            </p>
         </div>
 
-        <!-- MPT 核心：機會集合與 MVP -->
+        <!-- MPT 核心：機會集合與 MVP 圖表 -->
         <div class="card border-primary" style="border: 1px solid #b8daff;">
             <div class="card-header bg-light text-primary border-primary">
-                 Part II. 投資組合機會集合 (Opportunity Set) & 最小變異投資組合 (MVP)
+                🎯 Part II. 投資組合機會集合 (Opportunity Set) 模擬與 MVP 視覺化
             </div>
             <div class="card-body">
-                <p class="text-muted small mb-4">透過蒙地卡羅模擬隨機生成 3,000 組投資權重，構建 10 檔資產的投資組合機會集合，並精確定位出年化波動率最低的最優資產配置比例 (MVP)。</p>
-                
                 <div class="row align-items-center">
                     <div class="col-xl-8 mb-4 mb-xl-0">
                         <div style="background: white; border-radius: 8px; overflow: hidden;">
@@ -99,7 +86,7 @@ HTML_TEMPLATE = """
                     </div>
                     <div class="col-xl-4">
                         <div class="p-4 rounded h-100" style="background-color: #fcfdfd; border: 1px solid #e9ecef;">
-                            <h5 class="fw-bold mb-3 text-center"> MVP 最佳權重配置</h5>
+                            <h5 class="fw-bold mb-3 text-center">🏆 MVP 最佳權重比例</h5>
                             <div class="row">
                                 <div class="col-6">
                                     <ul class="list-group list-group-flush mb-0" style="font-size: 0.9rem;">
@@ -112,14 +99,28 @@ HTML_TEMPLATE = """
                                     </ul>
                                 </div>
                             </div>
-                            <div class="text-center mt-3 pt-3 border-top">
-                                <p class="mb-1 text-muted">預期年化報酬率</p>
-                                <h4 class="text-success fw-bold">{{ mvp_return }}</h4>
-                                <p class="mb-1 mt-3 text-muted">年化波動率 (風險)</p>
-                                <h4 class="text-danger fw-bold">{{ mvp_volatility }}</h4>
-                            </div>
                         </div>
                     </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Part I. 價格資料與 Return Matrix 展示區塊 -->
+        <div class="card border-info" style="border: 1px solid #17a2b8;">
+            <div class="card-header bg-light text-info border-info">
+                📂 Part I. 資料蒐集與處理 (Price & Return Matrix)
+            </div>
+            <div class="card-body p-0">
+                <div class="p-3">
+                    <p class="text-muted small mb-0">已讀取 Adjusted Close Price，並使用 <code>ffill().dropna()</code> 完成 Missing Values 處理。以下為「歷史價格表」與「Return Matrix」前 5 筆資料。</p>
+                </div>
+                <h6 class="fw-bold text-secondary px-3 mt-2 mb-2">Step 1~3: 歷史價格表 (Adjusted Close Price)</h6>
+                <div class="table-responsive mb-4 px-3">
+                    {{ price_head_table | safe }}
+                </div>
+                <h6 class="fw-bold text-secondary px-3 mt-2 mb-2">Step 4~5: 每日報酬率矩陣 (Return Matrix)</h6>
+                <div class="table-responsive mb-3 px-3">
+                    {{ return_matrix_head_table | safe }}
                 </div>
             </div>
         </div>
@@ -128,7 +129,7 @@ HTML_TEMPLATE = """
         <div class="row">
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header"> Part II. 單一資產報酬與風險指標</div>
+                    <div class="card-header">📈 Part II. 單一資產報酬與風險指標</div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             {{ stats_table | safe }}
@@ -139,7 +140,7 @@ HTML_TEMPLATE = """
             
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header"> Part II. 相關係數矩陣 (Correlation Matrix)</div>
+                    <div class="card-header">🔗 Part II. 相關係數矩陣 (Correlation Matrix)</div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             {{ corr_table | safe }}
@@ -190,19 +191,16 @@ def index():
                 price_series.index = price_series.index.tz_localize(None)
                 df_list.append(price_series)
 
-        # 處理 Missing Values (向前填補並刪除) -> 取得乾淨的歷史價格表
         clean_price_data = pd.concat(df_list, axis=1).ffill().dropna()
-
-        # 2. 計算 Return Matrix
         daily_returns = clean_price_data.pct_change().dropna()
         trading_days = 252
 
+        # 計算指標
         avg_daily_return = daily_returns.mean()
         annualized_return = (1 + avg_daily_return) ** trading_days - 1
         std_dev = daily_returns.std()
         annualized_volatility = std_dev * np.sqrt(trading_days)
         
-        # 共變異數矩陣
         cov_matrix = daily_returns.cov()
         annualized_cov_matrix = cov_matrix * trading_days 
 
@@ -213,8 +211,8 @@ def index():
             'Annualized Volatility': annualized_volatility
         }).round(4)
 
-        # 3. 蒙地卡羅模擬 (3000組)
-        num_portfolios = 3000
+        # 2. 蒙地卡羅模擬 (優化為 1500 組，防止 Vercel 運算超時當機)
+        num_portfolios = 1500
         results = np.zeros((3, num_portfolios))
         weights_record = []
 
@@ -230,12 +228,13 @@ def index():
             results[1,i] = portfolio_return
             results[2,i] = portfolio_return / portfolio_std_dev
 
+        # 尋找 MVP
         min_vol_idx = np.argmin(results[0])
         mvp_volatility = results[0, min_vol_idx]
         mvp_return = results[1, min_vol_idx]
         mvp_weights = weights_record[min_vol_idx]
 
-        # 將 10 檔資產分兩欄顯示
+        # MVP 權重渲染
         mvp_weights_html_1 = ""
         mvp_weights_html_2 = ""
         for i, ticker in enumerate(tickers):
@@ -246,55 +245,29 @@ def index():
             else:
                 mvp_weights_html_2 += item_html
 
-        # 4. Plotly 散佈圖
+        # 3. Plotly 散佈圖
         fig = go.Figure()
-        
         fig.add_trace(go.Scatter(
-            x=results[0,:],
-            y=results[1,:],
-            mode='markers',
-            marker=dict(
-                size=4,
-                color=results[2,:], 
-                colorscale='Viridis',
-                showscale=True,
-                colorbar=dict(title="Sharpe Ratio")
-            ),
-            name='Opportunity Set',
-            text=[f"Risk: {r[0]:.3f}<br>Return: {r[1]:.3f}" for r in results.T],
-            hoverinfo='text'
+            x=results[0,:], y=results[1,:], mode='markers',
+            marker=dict(size=4, color=results[2,:], colorscale='Viridis', showscale=True, colorbar=dict(title="Sharpe Ratio")),
+            name='Opportunity Set', text=[f"Risk: {r[0]:.3f}<br>Return: {r[1]:.3f}" for r in results.T], hoverinfo='text'
         ))
-        
         fig.add_trace(go.Scatter(
-            x=[mvp_volatility],
-            y=[mvp_return],
-            mode='markers+text',
-            marker=dict(color='red', size=14, symbol='star'),
-            name='MVP',
-            text=['MVP'],
-            textposition='top center',
-            textfont=dict(size=14, color='red', weight='bold')
+            x=[mvp_volatility], y=[mvp_return], mode='markers+text',
+            marker=dict(color='red', size=14, symbol='star'), name='MVP', text=['MVP'], textposition='top center', textfont=dict(size=14, color='red', weight='bold')
         ))
-
         fig.update_layout(
             title='Portfolio Opportunity Set (Efficient Frontier Simulation)',
-            xaxis_title='Annualized Volatility (Risk)',
-            yaxis_title='Annualized Return',
-            margin=dict(l=40, r=40, t=40, b=40),
-            height=450,
-            showlegend=False
+            xaxis_title='Annualized Volatility (Risk)', yaxis_title='Annualized Return',
+            margin=dict(l=40, r=40, t=40, b=40), height=450, showlegend=False
         )
-        
         mpt_chart_div = fig.to_html(full_html=False, include_plotlyjs='cdn')
 
-        # 5. 表格渲染 (加入 text-nowrap 避免 10 檔資產表格跑版)
+        # 4. 表格渲染
         table_classes = 'table table-hover table-striped table-bordered text-nowrap m-0'
-        
-        # 轉換所有需要的表格，新增 price_head_table
         price_head_table = clean_price_data.head().round(2).to_html(classes=table_classes)
         return_matrix_head_table = daily_returns.head().round(4).to_html(classes=table_classes)
-        
-        stats_table = stats_df.T.to_html(classes=table_classes)
+        stats_table = stats_df.T.to_html(classes=table_classes) 
         corr_table = daily_returns.corr().round(4).to_html(classes=table_classes)
         cov_table = cov_matrix.round(6).to_html(classes=table_classes)
 
@@ -314,5 +287,4 @@ def index():
 
     except Exception as e:
         error_msg = traceback.format_exc()
-        error_html = f"<html><body><h2>程式執行發生錯誤</h2><pre style='background:#fee; padding:15px;'>{error_msg}</pre></body></html>"
-        return error_html
+        return f"<html><body><h2>程式執行發生錯誤</h2><pre style='background:#fee; padding:15px;'>{error_msg}</pre></body></html>"
