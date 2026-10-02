@@ -1,6 +1,5 @@
-streamlit
+flask
 yfinance
 pandas
 numpy
-seaborn
-matplotlib
+plotly
