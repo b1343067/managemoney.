@@ -148,19 +148,18 @@ def index():
         tickers = ['VOO', 'BRK-B', 'JPM', 'NVDA', 'GLD']
         df_list = []
         
-        # 【關鍵修正】一支一支分別抓取資料，避免 pandas 處理多層次索引時報錯
+        # 【終極修正】捨棄 download()，改用 Ticker().history() 避開所有索引錯誤
         for t in tickers:
-            temp_data = yf.download(t, start="2018-01-01", end="2024-01-01", progress=False)
-            if 'Adj Close' in temp_data.columns:
-                price_col = temp_data['Adj Close']
-            else:
-                price_col = temp_data['Close']
-                
-            # 確保取出來的是單一維度資料並命名
-            if isinstance(price_col, pd.DataFrame):
-                price_col = price_col.iloc[:, 0]
-                
-            df_list.append(price_col.rename(t))
+            stock = yf.Ticker(t)
+            # history() 拿到的 Close 預設就是經過除權息調整的 Adj Close
+            hist_data = stock.history(start="2018-01-01", end="2024-01-01")
+            
+            if not hist_data.empty and 'Close' in hist_data.columns:
+                # 只取出 Close 欄位，並將欄位名稱改成股票代號
+                price_series = hist_data['Close'].rename(t)
+                # 移除時區資訊，避免合併時出錯
+                price_series.index = price_series.index.tz_localize(None)
+                df_list.append(price_series)
 
         # 合併所有單一股票資料並處理遺失值
         clean_price_data = pd.concat(df_list, axis=1).ffill().dropna()
