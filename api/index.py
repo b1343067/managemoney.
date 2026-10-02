@@ -17,7 +17,7 @@ HTML_TEMPLATE = """
             background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); 
             color: white; 
             padding: 40px 0 30px; 
-            margin-bottom: 40px; 
+            margin-bottom: 30px; 
             box-shadow: 0 4px 12px rgba(0,0,0,0.1); 
         }
         .card { border: none; border-radius: 12px; box-shadow: 0 5px 15px rgba(0,0,0,0.05); margin-bottom: 30px; overflow: hidden; }
@@ -27,7 +27,7 @@ HTML_TEMPLATE = """
         .table tbody td { text-align: center; }
         .badge-ticker { font-size: 1rem; margin: 4px; padding: 8px 12px; font-weight: 500; display: inline-block; }
         .insight-box { background-color: #f8f9fa; border-left: 5px solid #2c3e50; padding: 20px; border-radius: 8px; margin-bottom: 30px; }
-        /* 強制表格不換行並可滾動 */
+        /* 強制表格不換行並可滾動，避免 10 檔資產擠破版面 */
         .table-responsive { overflow-x: auto; }
         .text-nowrap td, .text-nowrap th { white-space: nowrap; }
     </style>
@@ -53,9 +53,9 @@ HTML_TEMPLATE = """
 
     <div class="container-fluid px-4 px-lg-5">
         
-        <!-- 商業洞察區塊 -->
+        <!-- 商業洞察區塊 (整合 MPT 分析邏輯) -->
         <div class="insight-box shadow-sm">
-            <h5 class="fw-bold" style="color: #2c3e50;">📊 投資組合關聯性與分散風險洞察</h5>
+            <h5 class="fw-bold" style="color: #2c3e50;">📊 資產關聯性與分散風險洞察</h5>
             <ul class="mb-0 mt-3" style="line-height: 1.8;">
                 <li><strong>高連動性與攻擊部位：</strong>VOO、QQQ 與美國大型權值股 (NVDA, JPM) 具備高度正相關，作為推升預期報酬的主力。</li>
                 <li><strong>低連動與防禦部位：</strong>公債 (TLT) 與黃金 (GLD) 與一般股市的連動性極低，在市場波動時能提供強大的下檔保護。</li>
@@ -68,8 +68,10 @@ HTML_TEMPLATE = """
             <div class="card-header bg-light text-info border-info">
                 📂 Part I. 資料處理與 Return Matrix 展示
             </div>
-            <div class="card-body">
-                <p class="text-muted small mb-3">已透過 Python 讀取 Adjusted Close Price，並完成處理 Missing Values。以下展示整理後的每日報酬率矩陣 (Return Matrix) 前 5 筆資料。</p>
+            <div class="card-body p-0">
+                <div class="p-3">
+                    <p class="text-muted small mb-0">已透過 Python 讀取 Adjusted Close Price，並使用 <code>ffill().dropna()</code> 完成 Missing Values 處理。以下展示整理後的每日報酬率矩陣 (Return Matrix) 前 5 筆資料。</p>
+                </div>
                 <div class="table-responsive">
                     {{ return_matrix_head_table | safe }}
                 </div>
@@ -79,7 +81,7 @@ HTML_TEMPLATE = """
         <!-- MPT 核心：機會集合與 MVP -->
         <div class="card border-primary" style="border: 1px solid #b8daff;">
             <div class="card-header bg-light text-primary border-primary">
-                🎯 Part II. 投資組合機會集合 (Opportunity Set) & 最小變異投資組合 (MVP)
+                🎯 投資組合機會集合 (Opportunity Set) & 最小變異投資組合 (MVP)
             </div>
             <div class="card-body">
                 <p class="text-muted small mb-4">透過蒙地卡羅模擬隨機生成 3,000 組投資權重，構建 10 檔資產的投資組合機會集合，並精確定位出年化波動率最低的最優資產配置比例 (MVP)。</p>
@@ -119,10 +121,9 @@ HTML_TEMPLATE = """
 
         <!-- 基礎數據與矩陣區塊 -->
         <div class="row">
-            <!-- 單一資產報酬與風險 -->
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">📈 Part II. 單一資產報酬與風險指標 (Return & Risk)</div>
+                    <div class="card-header">📈 Part II. 單一資產報酬與風險指標</div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             {{ stats_table | safe }}
@@ -131,7 +132,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
             
-            <!-- 相關係數矩陣 -->
             <div class="col-12">
                 <div class="card">
                     <div class="card-header">🔗 Part II. 相關係數矩陣 (Correlation Matrix)</div>
@@ -143,7 +143,7 @@ HTML_TEMPLATE = """
                 </div>
             </div>
 
-            <!-- [新增] 共變異數矩陣 -->
+            <!-- [新增] 共變異數矩陣展示區塊 -->
             <div class="col-12">
                 <div class="card">
                     <div class="card-header">📉 Part II. 共變異數矩陣 (Covariance Matrix)</div>
@@ -186,19 +186,19 @@ def index():
                 price_series.index = price_series.index.tz_localize(None)
                 df_list.append(price_series)
 
+        # 處理 Missing Values (向前填補並刪除)
         clean_price_data = pd.concat(df_list, axis=1).ffill().dropna()
 
-        # 2. 計算 Return Matrix
+        # 2. 計算基礎數據與 Return Matrix
         daily_returns = clean_price_data.pct_change().dropna()
         trading_days = 252
 
-        # 3. 計算各項指標
         avg_daily_return = daily_returns.mean()
         annualized_return = (1 + avg_daily_return) ** trading_days - 1
         std_dev = daily_returns.std()
         annualized_volatility = std_dev * np.sqrt(trading_days)
         
-        # 建立共變異數矩陣
+        # 共變異數矩陣
         cov_matrix = daily_returns.cov()
         annualized_cov_matrix = cov_matrix * trading_days 
 
@@ -209,7 +209,7 @@ def index():
             'Annualized Volatility': annualized_volatility
         }).round(4)
 
-        # 4. 蒙地卡羅模擬 (3000組)
+        # 3. 蒙地卡羅模擬 (3000組)
         num_portfolios = 3000
         results = np.zeros((3, num_portfolios))
         weights_record = []
@@ -242,7 +242,7 @@ def index():
             else:
                 mvp_weights_html_2 += item_html
 
-        # 5. Plotly 散佈圖
+        # 4. Plotly 散佈圖
         fig = go.Figure()
         
         fig.add_trace(go.Scatter(
@@ -283,12 +283,12 @@ def index():
         
         mpt_chart_div = fig.to_html(full_html=False, include_plotlyjs='cdn')
 
-        # 6. 表格渲染 (加入 text-nowrap 避免 10 檔資產表格跑版)
+        # 5. 表格渲染 (加入 text-nowrap 避免 10 檔資產表格跑版)
         table_classes = 'table table-hover table-striped table-bordered text-nowrap m-0'
         
-        # 轉換需展示的表格
+        # 轉換所有需要的表格
         return_matrix_head_table = daily_returns.head().round(4).to_html(classes=table_classes)
-        stats_table = stats_df.T.to_html(classes=table_classes)
+        stats_table = stats_df.T.to_html(classes=table_classes) # 轉置讓版面更整齊
         corr_table = daily_returns.corr().round(4).to_html(classes=table_classes)
         cov_table = cov_matrix.round(6).to_html(classes=table_classes)
 
