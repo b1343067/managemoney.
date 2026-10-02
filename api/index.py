@@ -145,20 +145,25 @@ def index():
         # ==========================================
         # Part I. 資產選擇與資料蒐集
         # ==========================================
-        # 1. 建立投資組合
         tickers = ['VOO', 'BRK-B', 'JPM', 'NVDA', 'GLD']
+        df_list = []
         
-        # 2. 讀取價格資料 (使用 5 年以上 Daily Data)
-        data = yf.download(tickers, start="2018-01-01", end="2024-01-01", progress=False)
-        
-        # 確保取用 Adjusted Close Price
-        if 'Adj Close' in data.columns:
-            data = data['Adj Close']
-        elif 'Close' in data.columns:
-            data = data['Close']
-            
-        # 3. 處理 Missing Values (向前填補並刪除空值)
-        clean_price_data = data.ffill().dropna()
+        # 【關鍵修正】一支一支分別抓取資料，避免 pandas 處理多層次索引時報錯
+        for t in tickers:
+            temp_data = yf.download(t, start="2018-01-01", end="2024-01-01", progress=False)
+            if 'Adj Close' in temp_data.columns:
+                price_col = temp_data['Adj Close']
+            else:
+                price_col = temp_data['Close']
+                
+            # 確保取出來的是單一維度資料並命名
+            if isinstance(price_col, pd.DataFrame):
+                price_col = price_col.iloc[:, 0]
+                
+            df_list.append(price_col.rename(t))
+
+        # 合併所有單一股票資料並處理遺失值
+        clean_price_data = pd.concat(df_list, axis=1).ffill().dropna()
 
         # 4 & 5. 計算各資產 Return 並建立 Return Matrix
         daily_returns = clean_price_data.pct_change()
