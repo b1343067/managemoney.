@@ -65,7 +65,7 @@ HTML_TEMPLATE = """
 
         <!-- [明確標示] MVP 最終解答區塊 -->
         <div class="mvp-box shadow-sm">
-            <h5 class="fw-bold text-dark">🏆 最小變異投資組合 (Minimum Variance Portfolio, MVP) 結論</h5>
+            <h5 class="fw-bold text-dark"> 最小變異投資組合 (Minimum Variance Portfolio, MVP) 結論</h5>
             <p class="mt-2 mb-0" style="line-height: 1.6; color: #555;">
                 透過 Python 進行蒙地卡羅模擬，建構出下方的「投資組合機會集合 (Opportunity Set)」。在所有可能的權重配置中，系統找出了風險（年化波動率）最低的 <strong>MVP (紅色星號)</strong>。<br>
                 該 MVP 的預期年化報酬率為 <strong class="text-success">{{ mvp_return }}</strong>，年化風險降至極低的 <strong class="text-danger">{{ mvp_volatility }}</strong>。詳細的最佳權重配置請見下方圖表右側面板。
@@ -75,7 +75,7 @@ HTML_TEMPLATE = """
         <!-- MPT 核心：機會集合與 MVP 圖表 -->
         <div class="card border-primary" style="border: 1px solid #b8daff;">
             <div class="card-header bg-light text-primary border-primary">
-                🎯 Part II. 投資組合機會集合 (Opportunity Set) 模擬與 MVP 視覺化
+                 Part II. 投資組合機會集合 (Opportunity Set) 模擬與 MVP 視覺化
             </div>
             <div class="card-body">
                 <div class="row align-items-center">
@@ -86,7 +86,7 @@ HTML_TEMPLATE = """
                     </div>
                     <div class="col-xl-4">
                         <div class="p-4 rounded h-100" style="background-color: #fcfdfd; border: 1px solid #e9ecef;">
-                            <h5 class="fw-bold mb-3 text-center">🏆 MVP 最佳權重比例</h5>
+                            <h5 class="fw-bold mb-3 text-center"> MVP 最佳權重比例</h5>
                             <div class="row">
                                 <div class="col-6">
                                     <ul class="list-group list-group-flush mb-0" style="font-size: 0.9rem;">
@@ -108,7 +108,7 @@ HTML_TEMPLATE = """
         <!-- Part I. 價格資料與 Return Matrix 展示區塊 -->
         <div class="card border-info" style="border: 1px solid #17a2b8;">
             <div class="card-header bg-light text-info border-info">
-                📂 Part I. 資料蒐集與處理 (Price & Return Matrix)
+                 Part I. 資料蒐集與處理 (Price & Return Matrix)
             </div>
             <div class="card-body p-0">
                 <div class="p-3">
@@ -129,7 +129,7 @@ HTML_TEMPLATE = """
         <div class="row">
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">📈 Part II. 單一資產報酬與風險指標</div>
+                    <div class="card-header"> Part II. 單一資產報酬與風險指標</div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             {{ stats_table | safe }}
@@ -140,7 +140,7 @@ HTML_TEMPLATE = """
             
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">🔗 Part II. 相關係數矩陣 (Correlation Matrix)</div>
+                    <div class="card-header"> Part II. 相關係數矩陣 (Correlation Matrix)</div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             {{ corr_table | safe }}
@@ -151,7 +151,7 @@ HTML_TEMPLATE = """
 
             <div class="col-12">
                 <div class="card">
-                    <div class="card-header">📉 Part II. 共變異數矩陣 (Covariance Matrix)</div>
+                    <div class="card-header"> Part II. 共變異數矩陣 (Covariance Matrix)</div>
                     <div class="card-body p-0">
                         <div class="table-responsive">
                             {{ cov_table | safe }}
