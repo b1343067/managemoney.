@@ -1,8 +1,5 @@
 from flask import Flask, render_template_string
-import yfinance as yf
-import pandas as pd
-import numpy as np
-import plotly.express as px
+import traceback
 
 app = Flask(__name__)
 
@@ -20,6 +17,7 @@ HTML_TEMPLATE = """
         th, td { border: 1px solid #ddd; padding: 10px; text-align: right; }
         th { background-color: #f8f9fa; color: #333; }
         .container { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .error { color: red; background: #fee; padding: 15px; border-radius: 5px; overflow-x: auto; }
     </style>
 </head>
 <body>
@@ -45,52 +43,79 @@ HTML_TEMPLATE = """
 
 @app.route('/')
 def index():
-    # 1. 抓取資料
-    tickers = ['VOO', 'BRK-B', 'JPM', 'NVDA', 'GLD']
-    data = yf.download(tickers, start="2018-01-01", end="2024-01-01")['Adj Close']
-    data = data.ffill().dropna()
+    try:
+        import yfinance as yf
+        import pandas as pd
+        import numpy as np
+        import plotly.express as px
 
-    # 2. 計算每日報酬率
-    daily_returns = data.pct_change().dropna()
-    trading_days = 252
+        # 1. 抓取資料 (加入 progress=False 防止在伺服器端印出進度條導致錯誤)
+        tickers = ['VOO', 'BRK-B', 'JPM', 'NVDA', 'GLD']
+        data = yf.download(tickers, start="2018-01-01", end="2024-01-01", progress=False)
+        
+        # 處理 yfinance 可能的回傳格式變化 (安全取值)
+        if 'Adj Close' in data.columns:
+            data = data['Adj Close']
+        elif 'Close' in data.columns:
+            data = data['Close']
+            
+        data = data.ffill().dropna()
 
-    # 3. 計算各項 MPT 指標
-    avg_daily_return = daily_returns.mean()
-    annualized_return = (1 + avg_daily_return) ** trading_days - 1
-    std_dev = daily_returns.std()
-    annualized_volatility = std_dev * np.sqrt(trading_days)
+        # 2. 計算每日報酬率
+        daily_returns = data.pct_change().dropna()
+        trading_days = 252
 
-    stats_df = pd.DataFrame({
-        'Average Daily Return': avg_daily_return,
-        'Annualized Return': annualized_return,
-        'Daily Standard Deviation': std_dev,
-        'Annualized Volatility': annualized_volatility
-    }).round(4)
+        # 3. 計算各項 MPT 指標
+        avg_daily_return = daily_returns.mean()
+        annualized_return = (1 + avg_daily_return) ** trading_days - 1
+        std_dev = daily_returns.std()
+        annualized_volatility = std_dev * np.sqrt(trading_days)
 
-    corr_matrix = daily_returns.corr().round(4)
-    cov_matrix = daily_returns.cov().round(6)
+        stats_df = pd.DataFrame({
+            'Average Daily Return': avg_daily_return,
+            'Annualized Return': annualized_return,
+            'Daily Standard Deviation': std_dev,
+            'Annualized Volatility': annualized_volatility
+        }).round(4)
 
-    # 4. 使用 Plotly 繪製相關係數熱力圖，並轉成 HTML
-    fig = px.imshow(
-        corr_matrix, 
-        text_auto=True, 
-        aspect="auto", 
-        color_continuous_scale='RdBu_r', 
-        zmin=-1, zmax=1
-    )
-    fig.update_layout(margin=dict(l=20, r=20, t=20, b=20))
-    heatmap_div = fig.to_html(full_html=False, include_plotlyjs='cdn')
+        corr_matrix = daily_returns.corr().round(4)
+        cov_matrix = daily_returns.cov().round(6)
 
-    # 5. 將 Pandas DataFrame 轉換為 HTML 表格
-    stats_table = stats_df.to_html(classes='table')
-    corr_table = corr_matrix.to_html(classes='table')
-    cov_table = cov_matrix.to_html(classes='table')
+        # 4. 使用 Plotly 繪製相關係數熱力圖，並轉成 HTML
+        fig = px.imshow(
+            corr_matrix, 
+            text_auto=True, 
+            aspect="auto", 
+            color_continuous_scale='RdBu_r', 
+            zmin=-1, zmax=1
+        )
+        fig.update_layout(margin=dict(l=20, r=20, t=20, b=20))
+        heatmap_div = fig.to_html(full_html=False, include_plotlyjs='cdn')
 
-    # 6. 渲染網頁
-    return render_template_string(
-        HTML_TEMPLATE,
-        stats_table=stats_table,
-        corr_table=corr_table,
-        cov_table=cov_table,
-        heatmap_div=heatmap_div
-    )
+        # 5. 將 Pandas DataFrame 轉換為 HTML 表格
+        stats_table = stats_df.to_html(classes='table')
+        corr_table = corr_matrix.to_html(classes='table')
+        cov_table = cov_matrix.to_html(classes='table')
+
+        # 6. 渲染網頁
+        return render_template_string(
+            HTML_TEMPLATE,
+            stats_table=stats_table,
+            corr_table=corr_table,
+            cov_table=cov_table,
+            heatmap_div=heatmap_div
+        )
+
+    except Exception as e:
+        # 如果發生錯誤，將錯誤訊息詳細印在網頁上
+        error_msg = traceback.format_exc()
+        error_html = f"""
+        <html>
+            <body style='padding: 20px; font-family: sans-serif;'>
+                <h2>程式執行發生錯誤 (Python Error)</h2>
+                <div style='background: #ffebeb; color: #d32f2f; padding: 15px; border-radius: 5px; white-space: pre-wrap;'>{error_msg}</div>
+                <p>請將上方的錯誤代碼貼給我看，我來幫您修正！</p>
+            </body>
+        </html>
+        """
+        return error_html
