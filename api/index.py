@@ -105,31 +105,32 @@ HTML_TEMPLATE = """
         {% else %}
         <!-- ================= 分析結果儀表板區 ================= -->
         <div class="row mb-4">
-            <!-- 動態畫像 SVG 與判定結果 -->
+            <!-- 動態畫像判定結果 -->
             <div class="col-lg-4">
                 <div class="card h-100 p-4 text-center" style="background-color: #1a1a2e; color: white;">
                     <h3 class="fw-bold text-white mb-2">個人化投資畫像</h3>
-                    <p class="text-muted mb-0">風險承擔能力評估</p>
+                    <p class="text-muted mb-4">風險承擔能力評估</p>
                     
-                    <!-- 動態配色的 SVG 人頭畫像 -->
-                    <svg width="200" height="120" viewBox="0 0 240 140" class="mx-auto mt-4">
-                        <defs>
-                            <linearGradient id="grad1" x1="0%" y1="100%" x2="100%" y2="0%">
-                                <stop offset="0%" stop-color="{{ c_grad1 }}" />
-                                <stop offset="100%" stop-color="{{ c_grad2 }}" />
-                            </linearGradient>
-                            <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="{{ c_grad2 }}" />
-                                <stop offset="100%" stop-color="{{ c_base }}" />
-                            </linearGradient>
-                        </defs>
-                        <path d="M 40 120 A 80 80 0 0 1 120 40" fill="none" stroke="url(#grad1)" stroke-width="24" stroke-linecap="round" />
-                        <path d="M 120 40 A 80 80 0 0 1 200 120" fill="none" stroke="url(#grad2)" stroke-width="24" stroke-linecap="round" />
-                        <circle cx="120" cy="85" r="20" fill="{{ c_base }}" />
-                        <path d="M 85 140 C 85 110, 155 110, 155 140" fill="{{ c_base }}" />
-                    </svg>
-                    <!-- 直接將屬性大字寫在頭像下方，增強連結感 -->
-                    <h3 class="fw-bold mt-3 mb-4" style="color: {{ c_grad2 }}; text-shadow: 0px 0px 10px {{ c_grad2 }}88;">{{ final_profile }}</h3>
+                    <!-- 專業級環形進度條與標準人像 -->
+                    <div style="position: relative; width: 160px; height: 160px; margin: 0 auto;">
+                        <!-- 背景外圈 -->
+                        <svg viewBox="0 0 36 36" style="width: 160px; height: 160px; transform: rotate(-90deg);">
+                            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                fill="none" stroke="#2c3e50" stroke-width="2.5" />
+                            <!-- 動態風險進度條 -->
+                            <path d="M18 2.0845 a 15.9155 15.9155 0 0 1 0 31.831 a 15.9155 15.9155 0 0 1 0 -31.831"
+                                fill="none" stroke="{{ icon_color }}" stroke-width="3" stroke-linecap="round"
+                                stroke-dasharray="{{ stroke_dash }}, 100" style="transition: stroke-dasharray 1s ease-out;" />
+                        </svg>
+                        <!-- 中間專業人像 -->
+                        <div style="position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);">
+                            <svg width="65" height="65" viewBox="0 0 24 24" fill="{{ icon_color }}">
+                                <path d="M12 12c2.21 0 4-1.79 4-4s-1.79-4-4-4-4 1.79-4 4 1.79 4 4 4zm0 2c-2.67 0-8 1.34-8 4v2h16v-2c0-2.66-5.33-4-8-4z"/>
+                            </svg>
+                        </div>
+                    </div>
+                    <!-- 屬性大標題 -->
+                    <h3 class="fw-bold mt-4 mb-4" style="color: {{ icon_color }}; letter-spacing: 2px;">{{ final_profile }}</h3>
                     
                     <hr class="border-secondary mb-4">
                     <div class="text-start">
@@ -138,7 +139,7 @@ HTML_TEMPLATE = """
                         <h6 class="text-info mt-4">❤️ 當前投資心態</h6>
                         <p class="fw-bold">{{ state }}</p>
                         <h6 class="text-info mt-4">⚙️ 專業投資行為建議</h6>
-                        <p class="fw-bold" style="font-size: 0.95rem;">{{ alert }}</p>
+                        <p class="fw-bold" style="font-size: 0.95rem; color: #dcdde1;">{{ alert }}</p>
                     </div>
                     <div class="text-center mt-auto pt-4">
                         <a href="/" class="btn btn-outline-light w-100">🔄 重新測驗</a>
@@ -257,13 +258,13 @@ def index():
         if logic_flag == "保守": final_profile = "保守型"
         elif logic_flag in ["激進", "從眾"] and baseline == "保守型": pass 
         
-        # 根據最終結果設定動態畫像顏色
+        # 設定新版儀表板的顏色與進度條長度
         if final_profile == "保守型":
-            c_grad1, c_grad2, c_base = "#00E5FF", "#2979FF", "#3949AB" # 冷色系(藍)
+            icon_color, stroke_dash = "#00BFFF", "33" # 藍色，進度 1/3
         elif final_profile == "穩健型":
-            c_grad1, c_grad2, c_base = "#FFD54F", "#FF8F00", "#E65100" # 平衡色系(橘)
+            icon_color, stroke_dash = "#FFB300", "66" # 橘黃，進度 2/3
         else:
-            c_grad1, c_grad2, c_base = "#FF5252", "#D50000", "#B71C1C" # 熱色系(紅)
+            icon_color, stroke_dash = "#FF5252", "100" # 紅色，進度全滿
 
         # 2. 獲取 MPT 數據並繪圖
         mpt = get_mpt_data()
@@ -299,7 +300,7 @@ def index():
         fig2.update_layout(barmode='stack', margin=dict(l=20, r=20, t=20, b=20), height=350, legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
         fig2_html = fig2.to_html(full_html=False, include_plotlyjs='cdn')
         
-        return render_template_string(HTML_TEMPLATE, show_results=True, baseline=baseline, state=state, alert=alert, final_profile=final_profile, fig1_html=fig1_html, fig2_html=fig2_html, c_grad1=c_grad1, c_grad2=c_grad2, c_base=c_base)
+        return render_template_string(HTML_TEMPLATE, show_results=True, baseline=baseline, state=state, alert=alert, final_profile=final_profile, fig1_html=fig1_html, fig2_html=fig2_html, icon_color=icon_color, stroke_dash=stroke_dash)
 
     except Exception as e:
         return f"<h2>系統運算錯誤</h2><pre>{traceback.format_exc()}</pre>"
