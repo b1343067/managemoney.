@@ -60,30 +60,30 @@ HTML_TEMPLATE = """
         <div class="row justify-content-center">
             <div class="col-lg-8">
                 <div class="card p-4">
-                    <h4 class="fw-bold text-center mb-4" style="color: #2c3e50;">📊 投資人風險屬性評估 (KYC)</h4>
+                    <h4 class="fw-bold text-center mb-4" style="color: #2c3e50;">投資人風險屬性評估 (KYC)</h4>
                     <form method="POST" action="/">
                         <div class="mb-3">
-                            <label class="form-label fw-bold">💰 收入與現金流</label>
+                            <label class="form-label fw-bold">收入</label>
                             <select class="form-select" name="inc"><option>穩定正向</option><option>收支打平</option><option>入不敷出</option></select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label fw-bold">💼 可投資資產</label>
+                            <label class="form-label fw-bold">可投資資產</label>
                             <select class="form-select" name="ast"><option>50萬以下</option><option>50-300萬</option><option>300萬以上</option></select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label fw-bold">🏠 流動性需求</label>
+                            <label class="form-label fw-bold">流動性需求</label>
                             <select class="form-select" name="liq"><option>高 (隨時需要變現)</option><option>中 (偶有資金需求)</option><option>低 (閒置資金)</option></select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label fw-bold">📅 投資期限</label>
+                            <label class="form-label fw-bold">投資期限</label>
                             <select class="form-select" name="hor"><option>1年內</option><option>1-3年</option><option>3-10年</option><option>10年以上</option></select>
                         </div>
                         <div class="mb-3">
-                            <label class="form-label fw-bold">🧾 負債狀況</label>
+                            <label class="form-label fw-bold">負債狀況</label>
                             <select class="form-select" name="lia"><option>無負債</option><option>可控負債 (如房貸)</option><option>高負債壓力</option></select>
                         </div>
                         <hr class="my-4">
-                        <h5 class="fw-bold mb-3 text-primary">🧠 情境與行為測試 (NLP 分析)</h5>
+                        <h5 class="fw-bold mb-3 text-primary">情境與行為測試 (NLP 分析)</h5>
                         <div class="mb-3">
                             <label class="form-label">如果您的投資組合一個月下跌 20%，您會怎麼做？為什麼？</label>
                             <textarea class="form-control" name="q1" rows="2" required></textarea>
@@ -134,15 +134,15 @@ HTML_TEMPLATE = """
                     
                     <hr class="border-secondary mb-4">
                     <div class="text-start">
-                        <h6 class="text-info">📊 客觀財務風險評分</h6>
+                        <h6 class="text-info">客觀財務風險評分</h6>
                         <p class="fw-bold fs-5">{{ baseline }}</p>
-                        <h6 class="text-info mt-4">❤️ 當前投資心態</h6>
+                        <h6 class="text-info mt-4">當前投資心態</h6>
                         <p class="fw-bold">{{ state }}</p>
-                        <h6 class="text-info mt-4">⚙️ 專業投資行為建議</h6>
+                        <h6 class="text-info mt-4">專業投資行為建議</h6>
                         <p class="fw-bold" style="font-size: 0.95rem; color: #dcdde1;">{{ alert }}</p>
                     </div>
                     <div class="text-center mt-auto pt-4">
-                        <a href="/" class="btn btn-outline-light w-100">🔄 重新測驗</a>
+                        <a href="/" class="btn btn-outline-light w-100">重新測驗</a>
                     </div>
                 </div>
             </div>
@@ -150,13 +150,13 @@ HTML_TEMPLATE = """
             <!-- 作業規定 Figure 1 & Figure 2 -->
             <div class="col-lg-8">
                 <div class="card mb-4">
-                    <div class="card-header">📈 Figure 1. 效率前緣與專屬投資組合 (Efficient Frontier)</div>
+                    <div class="card-header">Figure 1. 效率前緣與專屬投資組合 (Efficient Frontier)</div>
                     <div class="card-body p-0">
                         {{ fig1_html | safe }}
                     </div>
                 </div>
                 <div class="card">
-                    <div class="card-header">📊 Figure 2. 資產配置最佳化比例 (Optimal Asset Allocation)</div>
+                    <div class="card-header">Figure 2. 資產配置最佳化比例 (Optimal Asset Allocation)</div>
                     <div class="card-body p-0">
                         {{ fig2_html | safe }}
                     </div>
