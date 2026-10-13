@@ -1,4 +1,4 @@
-from flask import Flask, request, render_template_string, Response
+。from flask import Flask, request, render_template_string, Response
 import traceback
 import pandas as pd
 import numpy as np
@@ -60,7 +60,7 @@ HTML_TEMPLATE = """
         <div class="row justify-content-center">
             <div class="col-lg-8">
                 <div class="card p-4">
-                    <h4 class="fw-bold text-center mb-4" style="color: #2c3e50;">投資人風險屬性評估 (KYC)</h4>
+                    <h4 class="fw-bold text-center mb-4" style="color: #2c3e50;">投資人風險屬性評估</h4>
                     <form method="POST" action="/">
                         <div class="mb-3">
                             <label class="form-label fw-bold">收入</label>
@@ -83,7 +83,7 @@ HTML_TEMPLATE = """
                             <select class="form-select" name="lia"><option>無負債</option><option>可控負債 (如房貸)</option><option>高負債壓力</option></select>
                         </div>
                         <hr class="my-4">
-                        <h5 class="fw-bold mb-3 text-primary">情境與行為測試 (NLP 分析)</h5>
+                        <h5 class="fw-bold mb-3 text-primary"</h5>
                         <div class="mb-3">
                             <label class="form-label">如果您的投資組合一個月下跌 20%，您會怎麼做？為什麼？</label>
                             <textarea class="form-control" name="q1" rows="2" required></textarea>
