@@ -8,23 +8,24 @@ import yfinance as yf
 app = Flask(__name__)
 
 # ==========================================
-# 1. NLP 分析引擎與計分邏輯 (來自你的設計)
+# 1. NLP 分析引擎與計分邏輯 (語氣溫和專業化)
 # ==========================================
 def analyze_nlp(t1, t2, t3):
     text = (t1 + t2 + t3).lower()
     if not text.strip():
-        return "無數據", "請輸入對話以啟動分析", "無"
+        return "尚未填寫", "請完成問卷以獲取個人化行為建議。", "無"
+    
     if any(w in text for w in ["怕", "賣", "擔心", "焦慮", "虧", "恐慌", "睡不著"]):
-        return "高度焦慮 / 損失規避", "留意恐慌性拋售風險，建議提高防禦資產。", "焦慮"
+        return "謹慎保守 (風險趨避)", "您對市場波動較為敏感。建議配置較高比例的防禦性資產（如債券），以降低資產波動帶來的心理壓力。", "保守"
     elif any(w in text for w in ["加碼", "買", "抄底", "機會", "歐印", "滿倉"]):
-        return "過度自信", "留意過度集中與槓桿風險，嚴守停損紀律。", "自信"
+        return "積極進取 (追求成長)", "您對市場抱持樂觀態度。在追求高報酬的同時，建議仍需注意資產過度集中的風險，維持適度的資產配置紀律。", "激進"
     elif any(w in text for w in ["朋友", "別人", "跟", "羨慕", "不是滋味", "換"]):
-        return "從眾傾向 / FOMO", "易受外界雜訊影響，留意追高殺低風險。", "從眾"
+        return "市場跟隨 (易受情緒影響)", "您較容易關注市場熱點與他人績效。建議制定屬於自己的長期投資計畫，避免因市場雜訊而頻繁交易。", "從眾"
     else:
-        return "情緒平穩", "無極端偏誤，維持長期投資紀律。", "平穩"
+        return "理性平穩 (紀律投資)", "您目前的投資心態相當穩定。建議繼續保持理性，不受短期波動影響，堅定執行長期資產配置。", "平穩"
 
 # ==========================================
-# 2. 前端 HTML 模板 (Jinja2 條件渲染)
+# 2. 前端 HTML 模板 (全中文介面)
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -45,10 +46,10 @@ HTML_TEMPLATE = """
 </head>
 <body>
     <div class="header-banner text-center">
-        <h1 class="fw-bold mb-2">Automated Robo-Advisor</h1>
+        <h1 class="fw-bold mb-2">智能理財機器人 (Robo-Advisor)</h1>
         <p class="lead mb-4">動態風險評估與 MPT 資產配置最佳化</p>
         {% if show_results %}
-        <a href="/download_csv" class="btn btn-outline-light btn-sm mb-3">⬇️ 下載歷史價格 CSV (繳交作業用)</a>
+        <a href="/download_csv" class="btn btn-outline-light btn-sm mb-3">⬇️ 下載歷史價格 CSV (作業繳交用)</a>
         {% endif %}
     </div>
 
@@ -95,7 +96,7 @@ HTML_TEMPLATE = """
                             <label class="form-label">如果您的朋友靠 AI 股票賺了 30%，而您的投資只有 5%，您會怎麼做？</label>
                             <textarea class="form-control" name="q3" rows="2" required></textarea>
                         </div>
-                        <button type="submit" class="btn btn-primary w-100 mt-3">Generate Dynamic Profile & Portfolio</button>
+                        <button type="submit" class="btn btn-primary w-100 mt-3">生成專屬風險畫像與投資組合</button>
                     </form>
                 </div>
             </div>
@@ -107,8 +108,8 @@ HTML_TEMPLATE = """
             <!-- 動態畫像 SVG 與判定結果 -->
             <div class="col-lg-4">
                 <div class="card h-100 p-4 text-center" style="background-color: #1a1a2e; color: white;">
-                    <h3 class="fw-bold text-white mb-0">Dynamic Investor</h3>
-                    <p class="text-muted mb-3">動態風險畫像判定</p>
+                    <h3 class="fw-bold text-white mb-0">個人化投資畫像</h3>
+                    <p class="text-muted mb-3">風險屬性與心態分析</p>
                     <svg width="200" height="120" viewBox="0 0 240 140" class="mx-auto">
                         <defs>
                             <linearGradient id="grad1" x1="0%" y1="100%" x2="100%" y2="0%">
@@ -126,14 +127,14 @@ HTML_TEMPLATE = """
                         <path d="M 85 140 C 85 110, 155 110, 155 140" fill="#3949AB" />
                     </svg>
                     <div class="text-start mt-4">
-                        <h6 class="text-info">📊 Baseline Risk</h6>
+                        <h6 class="text-info">📊 客觀財務風險承受度</h6>
                         <p class="fw-bold fs-5">{{ baseline }}</p>
-                        <h6 class="text-info mt-3">❤️ Emotional State</h6>
+                        <h6 class="text-info mt-3">❤️ 當前投資心態</h6>
                         <p class="fw-bold">{{ state }}</p>
-                        <h6 class="text-info mt-3">⚙️ Behavioral Alert</h6>
-                        <p class="fw-bold">{{ alert }}</p>
+                        <h6 class="text-info mt-3">⚙️ 專業投資行為建議</h6>
+                        <p class="fw-bold" style="font-size: 0.95rem;">{{ alert }}</p>
                         <h6 class="text-warning mt-3">✅ 系統最終適配組合</h6>
-                        <p class="fw-bold text-warning fs-5">{{ final_profile }}</p>
+                        <p class="fw-bold text-warning fs-4">{{ final_profile }}</p>
                     </div>
                     <a href="/" class="btn btn-outline-light mt-4">🔄 重新測驗</a>
                 </div>
@@ -166,7 +167,7 @@ HTML_TEMPLATE = """
 """
 
 # ==========================================
-# 3. 抓取資料與 MPT 運算 (快取於全域變數避免超時)
+# 3. 抓取資料與 MPT 運算 (快取於全域變數)
 # ==========================================
 global_mpt_data = None
 
@@ -214,9 +215,9 @@ def get_mpt_data():
         'tickers': tickers,
         'results': results,
         'ports': {
-            'Conservative': {'risk': results[0, idx_cons], 'ret': results[1, idx_cons], 'w': weights_record[idx_cons]},
-            'Moderate': {'risk': results[0, idx_mod], 'ret': results[1, idx_mod], 'w': weights_record[idx_mod]},
-            'Aggressive': {'risk': results[0, idx_agg], 'ret': results[1, idx_agg], 'w': weights_record[idx_agg]}
+            '保守型': {'risk': results[0, idx_cons], 'ret': results[1, idx_cons], 'w': weights_record[idx_cons]},
+            '穩健型': {'risk': results[0, idx_mod], 'ret': results[1, idx_mod], 'w': weights_record[idx_mod]},
+            '激進型': {'risk': results[0, idx_agg], 'ret': results[1, idx_agg], 'w': weights_record[idx_agg]}
         }
     }
     return global_mpt_data
@@ -239,16 +240,17 @@ def index():
         if d.get("hor") in ["3-10年", "10年以上"]: score += 1
         if d.get("lia") == "無負債": score += 1
         
-        if score <= 2: baseline = "Conservative"
-        elif score <= 4: baseline = "Moderate"
-        else: baseline = "Aggressive"
+        # 基礎判定改為全中文
+        if score <= 2: baseline = "保守型"
+        elif score <= 4: baseline = "穩健型"
+        else: baseline = "激進型"
         
         state, alert, logic_flag = analyze_nlp(d.get("q1",""), d.get("q2",""), d.get("q3",""))
         
-        # 動態修正最終屬性
+        # 動態修正最終屬性 (主觀心態可能推翻客觀財力)
         final_profile = baseline
-        if logic_flag == "焦慮": final_profile = "Conservative"
-        elif logic_flag in ["自信", "從眾"] and baseline == "Conservative": pass
+        if logic_flag == "保守": final_profile = "保守型"
+        elif logic_flag in ["激進", "從眾"] and baseline == "保守型": pass # 即使積極，財力不夠仍維持保守
         
         # 2. 獲取 MPT 數據並繪圖
         mpt = get_mpt_data()
@@ -257,24 +259,31 @@ def index():
         
         # Figure 1: 效率前緣
         fig1 = go.Figure()
-        fig1.add_trace(go.Scatter(x=res[0,:], y=res[1,:], mode='markers', marker=dict(color=res[2,:], colorscale='Viridis', size=4, showscale=True), name='Opportunity Set'))
-        colors = {'Conservative': 'blue', 'Moderate': 'orange', 'Aggressive': 'red'}
+        fig1.add_trace(go.Scatter(x=res[0,:], y=res[1,:], mode='markers', marker=dict(color=res[2,:], colorscale='Viridis', size=4, showscale=True), name='投資機會集合'))
+        colors = {'保守型': 'blue', '穩健型': 'orange', '激進型': 'red'}
         
         for name, data in ports.items():
-            # 針對測驗出的屬性放大標示
-            size = 18 if name == final_profile else 10
+            # 針對測驗出的專屬屬性放大標示
+            size = 20 if name == final_profile else 10
             sym = 'star' if name == final_profile else 'circle'
-            fig1.add_trace(go.Scatter(x=[data['risk']], y=[data['ret']], mode='markers+text', marker=dict(color=colors[name], size=size, symbol=sym, line=dict(color='black', width=1)), text=[name], textposition='top center', textfont=dict(color=colors[name], size=14, weight='bold'), name=name))
-        fig1.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400, showlegend=False, xaxis_title="Risk (Volatility)", yaxis_title="Expected Return")
+            fig1.add_trace(go.Scatter(
+                x=[data['risk']], y=[data['ret']], mode='markers+text', 
+                marker=dict(color=colors[name], size=size, symbol=sym, line=dict(color='black', width=1)), 
+                text=[name], textposition='top center', 
+                textfont=dict(color=colors[name], size=14, weight='bold'), name=name
+            ))
+            
+        fig1.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400, showlegend=False, xaxis_title="風險 (年化波動率)", yaxis_title="預期報酬率")
         fig1_html = fig1.to_html(full_html=False, include_plotlyjs='cdn')
         
         # Figure 2: 堆疊長條圖 (資產配置)
         fig2 = go.Figure()
-        labels = ['Conservative', 'Moderate', 'Aggressive']
+        labels = ['保守型', '穩健型', '激進型']
         for i, ticker in enumerate(mpt['tickers']):
             y_vals = [ports[label]['w'][i] * 100 for label in labels]
             text_vals = [f"{ticker} {v:.1f}%" if v > 4 else "" for v in y_vals]
             fig2.add_trace(go.Bar(name=ticker, x=labels, y=y_vals, text=text_vals, textposition='inside'))
+            
         fig2.update_layout(barmode='stack', margin=dict(l=20, r=20, t=20, b=20), height=350, legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
         fig2_html = fig2.to_html(full_html=False, include_plotlyjs='cdn')
         
@@ -285,7 +294,6 @@ def index():
 
 @app.route('/download_csv')
 def download_csv():
-    # 自動化產出作業要求的 CSV 檔案
     mpt = get_mpt_data()
     return Response(
         mpt['csv'],
