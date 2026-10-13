@@ -8,7 +8,7 @@ import yfinance as yf
 app = Flask(__name__)
 
 # ==========================================
-# 1. NLP 分析引擎與計分邏輯 (語氣溫和專業化)
+# 1. NLP 分析引擎與計分邏輯
 # ==========================================
 def analyze_nlp(t1, t2, t3):
     text = (t1 + t2 + t3).lower()
@@ -25,7 +25,7 @@ def analyze_nlp(t1, t2, t3):
         return "理性平穩 (紀律投資)", "您目前的投資心態相當穩定。建議繼續保持理性，不受短期波動影響，堅定執行長期資產配置。", "平穩"
 
 # ==========================================
-# 2. 前端 HTML 模板 (全中文介面)
+# 2. 前端 HTML 模板
 # ==========================================
 HTML_TEMPLATE = """
 <!DOCTYPE html>
@@ -108,35 +108,41 @@ HTML_TEMPLATE = """
             <!-- 動態畫像 SVG 與判定結果 -->
             <div class="col-lg-4">
                 <div class="card h-100 p-4 text-center" style="background-color: #1a1a2e; color: white;">
-                    <h3 class="fw-bold text-white mb-0">個人化投資畫像</h3>
-                    <p class="text-muted mb-3">風險屬性與心態分析</p>
-                    <svg width="200" height="120" viewBox="0 0 240 140" class="mx-auto">
+                    <h3 class="fw-bold text-white mb-2">個人化投資畫像</h3>
+                    <p class="text-muted mb-0">風險承擔能力評估</p>
+                    
+                    <!-- 動態配色的 SVG 人頭畫像 -->
+                    <svg width="200" height="120" viewBox="0 0 240 140" class="mx-auto mt-4">
                         <defs>
                             <linearGradient id="grad1" x1="0%" y1="100%" x2="100%" y2="0%">
-                                <stop offset="0%" stop-color="#00E5FF" />
-                                <stop offset="100%" stop-color="#2979FF" />
+                                <stop offset="0%" stop-color="{{ c_grad1 }}" />
+                                <stop offset="100%" stop-color="{{ c_grad2 }}" />
                             </linearGradient>
                             <linearGradient id="grad2" x1="0%" y1="0%" x2="100%" y2="100%">
-                                <stop offset="0%" stop-color="#2979FF" />
-                                <stop offset="100%" stop-color="#AA00FF" />
+                                <stop offset="0%" stop-color="{{ c_grad2 }}" />
+                                <stop offset="100%" stop-color="{{ c_base }}" />
                             </linearGradient>
                         </defs>
                         <path d="M 40 120 A 80 80 0 0 1 120 40" fill="none" stroke="url(#grad1)" stroke-width="24" stroke-linecap="round" />
                         <path d="M 120 40 A 80 80 0 0 1 200 120" fill="none" stroke="url(#grad2)" stroke-width="24" stroke-linecap="round" />
-                        <circle cx="120" cy="85" r="20" fill="#3949AB" />
-                        <path d="M 85 140 C 85 110, 155 110, 155 140" fill="#3949AB" />
+                        <circle cx="120" cy="85" r="20" fill="{{ c_base }}" />
+                        <path d="M 85 140 C 85 110, 155 110, 155 140" fill="{{ c_base }}" />
                     </svg>
-                    <div class="text-start mt-4">
-                        <h6 class="text-info">📊 客觀財務風險承受度</h6>
+                    <!-- 直接將屬性大字寫在頭像下方，增強連結感 -->
+                    <h3 class="fw-bold mt-3 mb-4" style="color: {{ c_grad2 }}; text-shadow: 0px 0px 10px {{ c_grad2 }}88;">{{ final_profile }}</h3>
+                    
+                    <hr class="border-secondary mb-4">
+                    <div class="text-start">
+                        <h6 class="text-info">📊 客觀財務風險評分</h6>
                         <p class="fw-bold fs-5">{{ baseline }}</p>
-                        <h6 class="text-info mt-3">❤️ 當前投資心態</h6>
+                        <h6 class="text-info mt-4">❤️ 當前投資心態</h6>
                         <p class="fw-bold">{{ state }}</p>
-                        <h6 class="text-info mt-3">⚙️ 專業投資行為建議</h6>
+                        <h6 class="text-info mt-4">⚙️ 專業投資行為建議</h6>
                         <p class="fw-bold" style="font-size: 0.95rem;">{{ alert }}</p>
-                        <h6 class="text-warning mt-3">✅ 系統最終適配組合</h6>
-                        <p class="fw-bold text-warning fs-4">{{ final_profile }}</p>
                     </div>
-                    <a href="/" class="btn btn-outline-light mt-4">🔄 重新測驗</a>
+                    <div class="text-center mt-auto pt-4">
+                        <a href="/" class="btn btn-outline-light w-100">🔄 重新測驗</a>
+                    </div>
                 </div>
             </div>
 
@@ -167,7 +173,7 @@ HTML_TEMPLATE = """
 """
 
 # ==========================================
-# 3. 抓取資料與 MPT 運算 (快取於全域變數)
+# 3. 抓取資料與 MPT 運算
 # ==========================================
 global_mpt_data = None
 
@@ -240,18 +246,25 @@ def index():
         if d.get("hor") in ["3-10年", "10年以上"]: score += 1
         if d.get("lia") == "無負債": score += 1
         
-        # 基礎判定改為全中文
         if score <= 2: baseline = "保守型"
         elif score <= 4: baseline = "穩健型"
         else: baseline = "激進型"
         
         state, alert, logic_flag = analyze_nlp(d.get("q1",""), d.get("q2",""), d.get("q3",""))
         
-        # 動態修正最終屬性 (主觀心態可能推翻客觀財力)
+        # 動態修正最終屬性
         final_profile = baseline
         if logic_flag == "保守": final_profile = "保守型"
-        elif logic_flag in ["激進", "從眾"] and baseline == "保守型": pass # 即使積極，財力不夠仍維持保守
+        elif logic_flag in ["激進", "從眾"] and baseline == "保守型": pass 
         
+        # 根據最終結果設定動態畫像顏色
+        if final_profile == "保守型":
+            c_grad1, c_grad2, c_base = "#00E5FF", "#2979FF", "#3949AB" # 冷色系(藍)
+        elif final_profile == "穩健型":
+            c_grad1, c_grad2, c_base = "#FFD54F", "#FF8F00", "#E65100" # 平衡色系(橘)
+        else:
+            c_grad1, c_grad2, c_base = "#FF5252", "#D50000", "#B71C1C" # 熱色系(紅)
+
         # 2. 獲取 MPT 數據並繪圖
         mpt = get_mpt_data()
         res = mpt['results']
@@ -263,7 +276,6 @@ def index():
         colors = {'保守型': 'blue', '穩健型': 'orange', '激進型': 'red'}
         
         for name, data in ports.items():
-            # 針對測驗出的專屬屬性放大標示
             size = 20 if name == final_profile else 10
             sym = 'star' if name == final_profile else 'circle'
             fig1.add_trace(go.Scatter(
@@ -276,7 +288,7 @@ def index():
         fig1.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400, showlegend=False, xaxis_title="風險 (年化波動率)", yaxis_title="預期報酬率")
         fig1_html = fig1.to_html(full_html=False, include_plotlyjs='cdn')
         
-        # Figure 2: 堆疊長條圖 (資產配置)
+        # Figure 2: 堆疊長條圖
         fig2 = go.Figure()
         labels = ['保守型', '穩健型', '激進型']
         for i, ticker in enumerate(mpt['tickers']):
@@ -287,7 +299,7 @@ def index():
         fig2.update_layout(barmode='stack', margin=dict(l=20, r=20, t=20, b=20), height=350, legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
         fig2_html = fig2.to_html(full_html=False, include_plotlyjs='cdn')
         
-        return render_template_string(HTML_TEMPLATE, show_results=True, baseline=baseline, state=state, alert=alert, final_profile=final_profile, fig1_html=fig1_html, fig2_html=fig2_html)
+        return render_template_string(HTML_TEMPLATE, show_results=True, baseline=baseline, state=state, alert=alert, final_profile=final_profile, fig1_html=fig1_html, fig2_html=fig2_html, c_grad1=c_grad1, c_grad2=c_grad2, c_base=c_base)
 
     except Exception as e:
         return f"<h2>系統運算錯誤</h2><pre>{traceback.format_exc()}</pre>"
