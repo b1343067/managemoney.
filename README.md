@@ -20,4 +20,4 @@ Figure 5：MVO 與 BL 效率前緣比較
 Figure 6：樣本外累積報酬
 /download_csv：歷史價格；/download_bl_csv：BL 模型結果
 
-[https://managemoney-wa5d.vercel.app/](https://managemoney-wa5d-2ssp7hano-jimm7.vercel.app/)
+https://managemoney-wa5d.vercel.app/
