@@ -1,4 +1,6 @@
 from flask import Flask, request, render_template_string, Response
+from collections import deque
+import io
 import traceback
 import pandas as pd
 import numpy as np
@@ -11,32 +13,40 @@ app = Flask(__name__)
 # 0. 全域參數設定
 # ==========================================
 TICKERS = ['VOO', 'QQQ', 'BRK-B', 'JPM', 'NVDA', 'PG', 'VNQ', 'TLT', 'VWO', 'GLD']
+BENCHMARK = 'VOO'
 
-# 資料期間：估計期 (In-sample) 用來估計模型；測試期 (Out-of-sample) 用來做績效回測
-DATA_START = "2018-01-01"
-TRAIN_END = "2024-01-01"      # 估計期 2018/01 ~ 2023/12 (與前次作業相同)
-DATA_END = "2025-01-01"       # 測試期 2024/01 ~ 2024/12
+DATA_START = "2015-01-01"     # 回測起點 (約 10 年歷史)
+TRAIN_START = "2018-01-01"    # 模型估計期起點 (與前次作業相同)
+TRAIN_END = "2024-01-01"      # 估計期 2018/01 ~ 2023/12；之後為樣本外測試期
+DATA_END = None               # None = 抓到最新資料
 
 RF = 0.02         # 無風險利率 (年化)
-TAU = 0.05        # BL 模型 τ：先驗均衡報酬的不確定性縮放係數 (文獻常用 0.025~0.05)
-DELTA_MKT = 2.5   # 市場風險趨避係數 δ (He & Litterman 1999 常用值)
+TAU = 0.05        # BL 模型 τ
+DELTA_MKT = 2.5   # 市場風險趨避係數 δ
+FX_FALLBACK = 31.5  # 抓不到匯率時使用的 USD/TWD
 
-# 市場均衡權重 (Market-cap weights)：以 2023 年底「市值 / ETF 資產規模」約略值計算 (單位：十億美元)
-# 個股使用公司市值、ETF 使用基金規模 (AUM)，作為市場對各資產的「共識配置」代理變數。
+# 市場均衡權重：2023 年底「市值 / ETF 資產規模」約略值 (十億美元)
 MARKET_CAP = {
     'VOO': 370, 'QQQ': 250, 'BRK-B': 780, 'JPM': 490, 'NVDA': 1220,
     'PG': 345, 'VNQ': 33, 'TLT': 50, 'VWO': 80, 'GLD': 57,
 }
 
-# 依投資人屬性設定個人風險趨避係數 λ (越大越保守)
 PROFILE_LAMBDA = {'保守型': 10.0, '穩健型': 5.0, '激進型': 2.0}
 
-# 預設投資人觀點 (表單預設值，使用者可修改)
 DEFAULT_VIEWS = [
     {'on': True, 'type': 'rel', 'a': 'QQQ', 'b': 'TLT', 'q': 6.0, 'c': 60},
     {'on': True, 'type': 'abs', 'a': 'NVDA', 'b': 'VOO', 'q': 20.0, 'c': 40},
     {'on': True, 'type': 'rel', 'a': 'GLD', 'b': 'VWO', 'q': 3.0, 'c': 50},
 ]
+
+# 目標試算與台灣投資人成本預設值
+DEFAULT_PLAN = {
+    'init_twd': 300000, 'monthly_twd': 10000, 'target_twd': 3000000, 'years': 5,
+    'tax': 30.0, 'fee': 3.0, 'fxc': 0.1,
+}
+
+DISCLAIMER = ("本網站為課程作業與學習用途，所有模型結果、回測與試算皆基於歷史資料與假設參數，"
+              "不代表未來績效，亦不構成任何投資建議或要約。投資有風險，請依自身狀況審慎評估。")
 
 
 # ==========================================
@@ -60,7 +70,7 @@ def analyze_nlp(t1, t2, t3):
 # ==========================================
 # 2. 前端 HTML 模板
 # ==========================================
-HTML_TEMPLATE = """
+HEAD = """
 <!DOCTYPE html>
 <html lang="zh-TW">
 <head>
@@ -68,6 +78,7 @@ HTML_TEMPLATE = """
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Robo-Advisor | MPT & Black-Litterman</title>
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <script src="https://cdn.plot.ly/plotly-2.35.2.min.js"></script>
     <style>
         body { background-color: #f4f6f9; font-family: 'Segoe UI', sans-serif; color: #333; }
         .header-banner { background: linear-gradient(135deg, #1e3c72 0%, #2a5298 100%); color: white; padding: 40px 0 20px; margin-bottom: 30px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); }
@@ -79,23 +90,41 @@ HTML_TEMPLATE = """
         .formula { background: #f8f9fb; border-radius: 8px; padding: 12px 16px; font-family: 'Cambria Math', 'Times New Roman', serif; font-size: 1.02rem; }
         .view-row { background: #f8f9fb; border-radius: 10px; padding: 12px; margin-bottom: 10px; }
         table.table-sm td, table.table-sm th { font-size: 0.9rem; vertical-align: middle; }
-        .best { font-weight: 700; color: #0a7d32; }
+        .kpi { background: #f8f9fb; border-radius: 10px; padding: 16px; text-align: center; height: 100%; }
+        .kpi .v { font-size: 1.6rem; font-weight: 800; color: #1e3c72; }
+        .kpi .l { font-size: 0.85rem; color: #6c757d; }
+        .disclaimer { background: #fff8e1; border-left: 5px solid #ffb300; border-radius: 8px; padding: 12px 16px; font-size: 0.9rem; }
+        details summary { cursor: pointer; font-weight: 700; color: #2979FF; }
     </style>
 </head>
 <body>
+"""
+
+FOOTER = """
+        <div class="disclaimer mt-4">⚠️ <b>免責聲明：</b>{{ disclaimer }}</div>
+        <footer class="text-center mt-4 mb-5 text-muted" style="font-size: 0.85rem;">
+            &copy; 2026 MPT &amp; Black–Litterman Robo-Advisor System
+        </footer>
+    </div>
+</body>
+</html>
+"""
+
+HTML_TEMPLATE = HEAD + """
     <div class="header-banner text-center">
         <h1 class="fw-bold mb-2">智能理財機器人 (Robo-Advisor)</h1>
-        <p class="lead mb-4">動態風險評估 × MPT 均值-變異數最佳化 × Black–Litterman 模型</p>
+        <p class="lead mb-4">動態風險評估 × MPT × Black–Litterman × 回測與目標試算</p>
         {% if show_results %}
         <a href="/download_csv" class="btn btn-outline-light btn-sm mb-3 me-2">⬇️ 下載歷史價格 CSV</a>
-        <a href="/download_bl_csv" class="btn btn-outline-light btn-sm mb-3">⬇️ 下載 BL 模型結果 CSV</a>
+        <a href="/download_bl_csv" class="btn btn-outline-light btn-sm mb-3 me-2">⬇️ 下載 BL 模型結果 CSV</a>
         {% endif %}
+        <a href="/journal" class="btn btn-outline-light btn-sm mb-3">📒 交易日誌分析</a>
     </div>
 
     <div class="container px-4" style="max-width: 1200px;">
 
         {% if not show_results %}
-        <!-- ================= KYC 問卷表單區 ================= -->
+        <!-- ================= 問卷表單區 ================= -->
         <div class="row justify-content-center">
             <div class="col-lg-9">
                 <div class="card p-4">
@@ -141,8 +170,8 @@ HTML_TEMPLATE = """
                         <hr class="my-4">
                         <h5 class="fw-bold mb-2 text-primary">投資人觀點 (Investor Views) — Black–Litterman 輸入</h5>
                         <p class="text-muted small mb-3">
-                            絕對觀點：「A 的年化報酬率為 Q%」；相對觀點：「A 的年化報酬率將比 B 高 Q%」。
-                            信心水準 (0–100%) 越高，後驗報酬越貼近您的觀點；越低則越貼近市場均衡報酬。
+                            絕對觀點：「A 的年化報酬率為 Q%」（資產 B 不使用）；相對觀點：「A 的年化報酬率將比 B 高 Q%」。
+                            信心水準越高，後驗報酬越貼近您的觀點；越低則越貼近市場均衡報酬。
                         </p>
                         {% for v in views %}
                         {% set i = loop.index %}
@@ -183,14 +212,47 @@ HTML_TEMPLATE = """
                         </div>
                         {% endfor %}
 
-                        <button type="submit" class="btn btn-primary w-100 mt-3">生成專屬風險畫像與投資組合</button>
+                        <hr class="my-4">
+                        <h5 class="fw-bold mb-2 text-primary">理財目標與台灣投資人真實成本</h5>
+                        <p class="text-muted small mb-3">用於歷史回測、蒙地卡羅目標試算與稅費計算。手續費依各券商複委託方案而異，請改成您自己的券商費率。</p>
+                        <div class="row g-3">
+                            <div class="col-md-3 col-6"><label class="form-label small fw-bold">初始投入 (TWD)</label>
+                                <input type="number" min="0" step="1000" class="form-control" name="init_twd" value="{{plan.init_twd}}"></div>
+                            <div class="col-md-3 col-6"><label class="form-label small fw-bold">每月定期定額 (TWD)</label>
+                                <input type="number" min="0" step="1000" class="form-control" name="monthly_twd" value="{{plan.monthly_twd}}"></div>
+                            <div class="col-md-3 col-6"><label class="form-label small fw-bold">目標金額 (TWD)</label>
+                                <input type="number" min="0" step="10000" class="form-control" name="target_twd" value="{{plan.target_twd}}"></div>
+                            <div class="col-md-3 col-6"><label class="form-label small fw-bold">目標年限 (年)</label>
+                                <input type="number" min="1" max="40" step="1" class="form-control" name="years" value="{{plan.years}}"></div>
+                            <div class="col-md-4 col-6"><label class="form-label small fw-bold">美股股利預扣稅率 (%)</label>
+                                <input type="number" min="0" max="50" step="0.5" class="form-control" name="tax" value="{{plan.tax}}"></div>
+                            <div class="col-md-4 col-6"><label class="form-label small fw-bold">複委託每筆手續費 (USD)</label>
+                                <input type="number" min="0" step="0.5" class="form-control" name="fee" value="{{plan.fee}}"></div>
+                            <div class="col-md-4 col-12"><label class="form-label small fw-bold">換匯成本 / 匯差 (%)</label>
+                                <input type="number" min="0" step="0.05" class="form-control" name="fxc" value="{{plan.fxc}}"></div>
+                        </div>
+
+                        <details class="mt-4">
+                            <summary>目前持股（選填，填寫後產生再平衡與本月定投建議）</summary>
+                            <p class="text-muted small mt-2">請填入各資產目前的市值（美元），沒有持有的留空即可。</p>
+                            <div class="row g-2">
+                                {% for t in tickers %}
+                                <div class="col-md-2 col-4"><label class="form-label small">{{t}} (USD)</label>
+                                    <input type="number" min="0" step="1" class="form-control form-control-sm" name="h_{{t}}"></div>
+                                {% endfor %}
+                            </div>
+                        </details>
+
+                        <button type="submit" class="btn btn-primary w-100 mt-4">生成專屬風險畫像與投資組合</button>
                     </form>
                 </div>
             </div>
         </div>
 
         {% else %}
-        <!-- ================= 分析結果儀表板區 ================= -->
+        <div class="disclaimer mb-4">⚠️ <b>免責聲明：</b>{{ disclaimer }}</div>
+
+        <!-- ================= Part 1 ================= -->
         <h3 class="section-title">Part 1. 投資人畫像與 MPT 資產配置</h3>
         <div class="row mb-4">
             <div class="col-lg-4">
@@ -240,8 +302,8 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
+        <!-- ================= Part 2 ================= -->
         <h3 class="section-title">Part 2. Black–Litterman 模型</h3>
-
         <div class="row">
             <div class="col-lg-6">
                 <div class="card">
@@ -279,7 +341,6 @@ HTML_TEMPLATE = """
                 </div>
             </div>
         </div>
-
         <div class="card">
             <div class="card-header">Step 4. 貝氏估計後驗預期報酬 (Posterior Expected Returns)</div>
             <div class="card-body">
@@ -301,6 +362,7 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
+        <!-- ================= Part 3 ================= -->
         <h3 class="section-title">Part 3. MVO vs. Black–Litterman 比較</h3>
         <div class="row">
             <div class="col-lg-6">
@@ -321,7 +383,7 @@ HTML_TEMPLATE = """
             <div class="card-body">
                 <div class="table-responsive">
                 <table class="table table-sm text-center">
-                    <thead><tr><th>投資組合</th><th>預期報酬 (模型)</th><th>預期波動</th><th>最大單一權重</th><th>持有資產數 (&gt;1%)</th><th>有效資產數 1/HHI</th><th>與市值權重偏離 (TE 代理)</th></tr></thead>
+                    <thead><tr><th>投資組合</th><th>預期報酬 (模型)</th><th>預期波動</th><th>最大單一權重</th><th>持有資產數 (&gt;1%)</th><th>有效資產數 1/HHI</th><th>與市值權重偏離</th></tr></thead>
                     <tbody>
                     {% for r in alloc_table %}
                     <tr><td class="fw-bold">{{r.name}}</td><td>{{r.ret}}</td><td>{{r.vol}}</td><td>{{r.maxw}}</td><td>{{r.n}}</td><td>{{r.eff}}</td><td>{{r.dev}}</td></tr>
@@ -335,9 +397,10 @@ HTML_TEMPLATE = """
             </div>
         </div>
 
+        <!-- ================= Part 4 ================= -->
         <h3 class="section-title">Part 4. 績效分析（樣本外回測 {{ test_period }}）</h3>
         <div class="card">
-            <div class="card-header">Figure 6. 樣本外累積報酬 (Out-of-Sample Cumulative Return)</div>
+            <div class="card-header">Figure 6. 樣本外累積報酬 (Out-of-Sample Cumulative Return, USD)</div>
             <div class="card-body p-0">{{ fig6_html | safe }}</div>
         </div>
         <div class="card">
@@ -354,24 +417,181 @@ HTML_TEMPLATE = """
                 </table>
                 </div>
                 <p class="small text-muted mb-0">
-                    說明：所有模型參數僅使用估計期資料計算，再以買入持有 (Buy-and-Hold) 方式套用至測試期，避免前視偏差 (Look-ahead Bias)。
-                    Sharpe = (年化報酬 − r<sub>f</sub>) / 年化波動。
+                    模型參數僅使用估計期資料計算，再以買入持有方式套用至測試期，避免前視偏差 (Look-ahead Bias)。Sharpe = (年化報酬 − r<sub>f</sub>) / 年化波動。
                 </p>
             </div>
         </div>
+
+        <!-- ================= Part 5 ================= -->
+        <h3 class="section-title">Part 5. 長期歷史回測 vs. VOO（含台灣投資人真實成本）</h3>
+        <div class="card">
+            <div class="card-header">Figure 7. 單筆投入 {{ init_twd_fmt }} 的累積報酬（{{ bt_period }}，新台幣計價、每年再平衡）</div>
+            <div class="card-body p-0">{{ fig7_html | safe }}</div>
+        </div>
+        <div class="card">
+            <div class="card-header">回測績效：這個配置過去表現如何、最慘會跌多少？</div>
+            <div class="card-body">
+                <div class="table-responsive">
+                <table class="table table-sm table-striped text-center">
+                    <thead><tr><th>投資組合</th><th>累積報酬</th><th>年化報酬 CAGR</th><th>年化波動</th><th>Sharpe</th><th>最大回撤 MDD</th><th>最差年度</th><th>最慘時帳面虧損</th></tr></thead>
+                    <tbody>
+                    {% for r in bt_table %}
+                    <tr><td class="fw-bold">{{r.name}}</td><td>{{r.cum}}</td><td>{{r.ann}}</td><td>{{r.vol}}</td><td>{{r.sharpe}}</td><td>{{r.mdd}}</td><td>{{r.worst}}</td><td>{{r.loss}}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                <ul class="mb-0 small">
+                    {% for s in bt_notes %}<li>{{ s }}</li>{% endfor %}
+                </ul>
+            </div>
+        </div>
+        <div class="row">
+            <div class="col-lg-7">
+                <div class="card">
+                    <div class="card-header">Figure 8. 定期定額回測：初始 {{ init_twd_fmt }} + 每月 {{ monthly_twd_fmt }}</div>
+                    <div class="card-body p-0">{{ fig8_html | safe }}</div>
+                </div>
+            </div>
+            <div class="col-lg-5">
+                <div class="card">
+                    <div class="card-header">台灣投資人真實成本拆解（推薦組合）</div>
+                    <div class="card-body">
+                        <table class="table table-sm mb-3">
+                            <tbody>
+                            {% for r in cost_table %}
+                            <tr><td>{{r.k}}</td><td class="text-end fw-bold">{{r.v}}</td></tr>
+                            {% endfor %}
+                            </tbody>
+                        </table>
+                        <ul class="small mb-0">
+                            {% for s in cost_tips %}<li>{{ s }}</li>{% endfor %}
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ================= Part 6 ================= -->
+        <h3 class="section-title">Part 6. 目標試算（蒙地卡羅模擬 {{ mc_n }} 種市場情境）</h3>
+        <div class="row g-3 mb-4">
+            <div class="col-md-3 col-6"><div class="kpi"><div class="v">{{ mc.prob }}</div><div class="l">{{ mc.years }} 年後達成 {{ target_twd_fmt }} 的機率<br>（推薦組合）</div></div></div>
+            <div class="col-md-3 col-6"><div class="kpi"><div class="v">{{ mc.median }}</div><div class="l">終值中位數</div></div></div>
+            <div class="col-md-3 col-6"><div class="kpi"><div class="v">{{ mc.p10 }}</div><div class="l">悲觀情境（第 10 百分位）</div></div></div>
+            <div class="col-md-3 col-6"><div class="kpi"><div class="v">{{ mc.prob_voo }}</div><div class="l">對照：全部買 VOO 的達成機率</div></div></div>
+        </div>
+        <div class="card">
+            <div class="card-header">Figure 9. 資產成長模擬區間（第 10 / 50 / 90 百分位）</div>
+            <div class="card-body p-0">{{ fig9_html | safe }}</div>
+        </div>
+        <div class="card">
+            <div class="card-header">每個月要投入多少才夠？</div>
+            <div class="card-body">
+                <div class="table-responsive">
+                <table class="table table-sm text-center">
+                    <thead><tr><th>想要的達成機率</th><th>每月需投入 (TWD)</th><th>與目前設定 {{ monthly_twd_fmt }} 相比</th></tr></thead>
+                    <tbody>
+                    {% for r in mc.req %}
+                    <tr><td class="fw-bold">{{r.p}}</td><td>{{r.c}}</td><td>{{r.diff}}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                <p class="small text-muted mb-0">
+                    假設：推薦組合年化預期報酬 {{ mc.mu }}（BL 後驗報酬扣除股利預扣稅）、年化波動 {{ mc.sigma }}，月報酬服從對數常態分配；
+                    已扣除每次投入的換匯成本與複委託手續費，未考慮匯率波動與再平衡費用。
+                </p>
+            </div>
+        </div>
+
+        <!-- ================= Part 7 ================= -->
+        <h3 class="section-title">Part 7. 再平衡與本月定投建議</h3>
+        <div class="card">
+            <div class="card-body">
+                {% if rebal %}
+                <p class="mb-2">目前總市值 <b>{{ rebal.total }}</b>，本月可投入約 <b>{{ rebal.contrib }}</b>（{{ monthly_twd_fmt }} 扣除匯差後）。只買不賣的再平衡建議：</p>
+                <div class="table-responsive">
+                <table class="table table-sm table-striped text-center">
+                    <thead><tr><th>資產</th><th>目前市值</th><th>目前比例</th><th>目標比例</th><th>差距</th><th>方案 A：依缺口比例買入</th><th>方案 B：集中補足（省手續費）</th><th>買入後比例 (B)</th></tr></thead>
+                    <tbody>
+                    {% for r in rebal.rows %}
+                    <tr><td class="fw-bold">{{r.t}}</td><td>{{r.cur}}</td><td>{{r.cur_w}}</td><td>{{r.tgt_w}}</td><td>{{r.gap}}</td><td>{{r.buy_a}}</td><td>{{r.buy_b}}</td><td>{{r.after}}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                <ul class="small mb-0">
+                    {% for s in rebal.notes %}<li>{{ s }}</li>{% endfor %}
+                </ul>
+                {% else %}
+                <p class="text-muted mb-0">尚未填寫目前持股。回到首頁展開「目前持股」並填入各資產市值，即可得到與目標配置的差距，以及本月定期定額該買哪一檔。</p>
+                {% endif %}
+            </div>
+        </div>
+        {% endif %}
+""" + FOOTER
+
+
+JOURNAL_TEMPLATE = HEAD + """
+    <div class="header-banner text-center">
+        <h1 class="fw-bold mb-2">交易日誌分析</h1>
+        <p class="lead mb-4">上傳交易紀錄 → 勝率、平均賺賠、持有天數，並與同期 VOO 比較</p>
+        <a href="/" class="btn btn-outline-light btn-sm mb-3">← 回到理財機器人</a>
+    </div>
+    <div class="container px-4" style="max-width: 1100px;">
+        <div class="card p-4">
+            <form method="POST" action="/journal" enctype="multipart/form-data">
+                <label class="form-label fw-bold">上傳交易紀錄 CSV</label>
+                <input class="form-control mb-2" type="file" name="file" accept=".csv" required>
+                <p class="small text-muted mb-3">
+                    欄位：<code>date, ticker, action, shares, price, fee</code>（action 填 BUY / SELL，fee 可省略，金額單位一致即可）。
+                    賣出以先進先出 (FIFO) 配對買進。<a href="/journal/sample">下載範例 CSV</a>
+                </p>
+                <button class="btn btn-primary w-100">開始分析</button>
+            </form>
+        </div>
+
+        {% if error %}
+        <div class="alert alert-danger">{{ error }}</div>
         {% endif %}
 
-        <footer class="text-center mt-4 mb-5 text-muted" style="font-size: 0.85rem;">
-            &copy; 2026 MPT &amp; Black–Litterman Robo-Advisor System
-        </footer>
-    </div>
-</body>
-</html>
-"""
+        {% if stats %}
+        <div class="row g-3 mb-4">
+            {% for k in stats %}
+            <div class="col-md-3 col-6"><div class="kpi"><div class="v">{{k.v}}</div><div class="l">{{k.l}}</div></div></div>
+            {% endfor %}
+        </div>
+        <div class="card">
+            <div class="card-header">每筆已實現交易報酬 vs. 同期持有 VOO</div>
+            <div class="card-body p-0">{{ fig_a | safe }}</div>
+        </div>
+        <div class="card">
+            <div class="card-header">累積已實現損益</div>
+            <div class="card-body p-0">{{ fig_b | safe }}</div>
+        </div>
+        <div class="card">
+            <div class="card-header">已實現交易明細</div>
+            <div class="card-body">
+                <div class="table-responsive">
+                <table class="table table-sm table-striped text-center">
+                    <thead><tr><th>標的</th><th>買進日</th><th>賣出日</th><th>股數</th><th>成本價</th><th>賣出價</th><th>損益</th><th>報酬率</th><th>同期 VOO</th><th>持有天數</th></tr></thead>
+                    <tbody>
+                    {% for r in trades %}
+                    <tr><td>{{r.ticker}}</td><td>{{r.buy}}</td><td>{{r.sell}}</td><td>{{r.shares}}</td><td>{{r.cost}}</td><td>{{r.px}}</td><td>{{r.pnl}}</td><td>{{r.ret}}</td><td>{{r.voo}}</td><td>{{r.days}}</td></tr>
+                    {% endfor %}
+                    </tbody>
+                </table>
+                </div>
+                {% for w in warnings %}<p class="small text-danger mb-1">⚠️ {{ w }}</p>{% endfor %}
+                {% if open_pos %}<p class="small text-muted mb-0">尚未平倉部位：{{ open_pos }}</p>{% endif %}
+            </div>
+        </div>
+        {% endif %}
+""" + FOOTER
 
 
 # ==========================================
-# 3. 資料抓取與 MPT 運算 (前次作業)
+# 3. 資料抓取與 MPT 運算
 # ==========================================
 global_mpt_data = None
 
@@ -381,23 +601,42 @@ def get_mpt_data():
     if global_mpt_data is not None:
         return global_mpt_data
 
-    df_list = []
+    adj_list, close_list, div_list = [], [], []
     for t in TICKERS:
-        hist_data = yf.Ticker(t).history(start=DATA_START, end=DATA_END)
-        if not hist_data.empty and 'Close' in hist_data.columns:
-            s = hist_data['Close'].rename(t)
-            s.index = s.index.tz_localize(None)
-            df_list.append(s)
+        h = yf.Ticker(t).history(start=DATA_START, end=DATA_END, auto_adjust=False)
+        if h.empty:
+            continue
+        h.index = h.index.tz_localize(None)
+        adj_col = 'Adj Close' if 'Adj Close' in h.columns else 'Close'
+        adj_list.append(h[adj_col].rename(t))
+        close_list.append(h['Close'].rename(t))
+        div_list.append((h['Dividends'] if 'Dividends' in h.columns else h['Close'] * 0).rename(t))
 
-    all_price = pd.concat(df_list, axis=1).ffill().dropna()
+    all_price = pd.concat(adj_list, axis=1).ffill().dropna()          # 還原權值價格 (含息總報酬)
+    raw_close = pd.concat(close_list, axis=1).reindex(all_price.index).ffill()
+    divs = pd.concat(div_list, axis=1).reindex(all_price.index).fillna(0)
+    div_yield = (divs / raw_close.shift(1)).fillna(0)               # 每日現金股利殖利率 (除息日)
     tickers = list(all_price.columns)
 
-    train_price = all_price[all_price.index < TRAIN_END]
+    # 匯率 USD/TWD
+    try:
+        fx_h = yf.Ticker("TWD=X").history(start=DATA_START, end=DATA_END)
+        fx_h.index = fx_h.index.tz_localize(None)
+        fx = fx_h['Close'].reindex(all_price.index, method='ffill').bfill()
+        if fx.isna().any() or fx.empty:
+            raise ValueError
+    except Exception:
+        fx = pd.Series(FX_FALLBACK, index=all_price.index)
+
+    train_mask = (all_price.index >= TRAIN_START) & (all_price.index < TRAIN_END)
+    train_price = all_price[train_mask]
     test_price = all_price[all_price.index >= TRAIN_END]
 
     daily_returns = train_price.pct_change().dropna()
     ann_ret = daily_returns.mean() * 252
     ann_cov = daily_returns.cov() * 252
+    train_years = len(train_price) / 252
+    ann_div_yield = div_yield[train_mask].sum() / train_years       # 年化現金殖利率
 
     np.random.seed(42)
     num_portfolios = 1500
@@ -422,11 +661,16 @@ def get_mpt_data():
     global_mpt_data = {
         'csv': all_price.to_csv(),
         'tickers': tickers,
+        'all_price': all_price,
+        'div_yield': div_yield,
+        'ann_div_yield': ann_div_yield.values,
+        'fx': fx,
         'ann_ret': ann_ret.values,
         'ann_cov': ann_cov.values,
         'test_price': test_price,
         'train_period': f"{train_price.index[0]:%Y/%m/%d} ~ {train_price.index[-1]:%Y/%m/%d}",
         'test_period': f"{test_price.index[0]:%Y/%m/%d} ~ {test_price.index[-1]:%Y/%m/%d}" if len(test_price) else "無資料",
+        'bt_period': f"{all_price.index[0]:%Y/%m} ~ {all_price.index[-1]:%Y/%m}",
         'results': results,
         'ports': {
             '保守型': {'risk': results[0, idx_cons], 'ret': results[1, idx_cons], 'w': weights_record[idx_cons]},
@@ -438,10 +682,10 @@ def get_mpt_data():
 
 
 # ==========================================
-# 4. Black–Litterman 模型核心
+# 4. Black–Litterman 模型與最佳化
 # ==========================================
 def project_simplex(v):
-    """把向量投影到 {w >= 0, sum(w) = 1}（只做多、權重和為 1）"""
+    """投影到 {w >= 0, sum(w) = 1}"""
     n = len(v)
     u = np.sort(v)[::-1]
     css = np.cumsum(u)
@@ -450,42 +694,29 @@ def project_simplex(v):
     return np.maximum(v - theta, 0)
 
 
-def mean_variance_opt(mu, cov, lam, iters=4000):
-    """
-    均值-變異數最適化（只做多、全額投資）：
-        max_w  wᵀμ − (λ/2) wᵀΣw   s.t. Σw = 1, w ≥ 0
-    使用投影梯度法 (Projected Gradient Ascent) 求解，不需 scipy。
-    """
+def mean_variance_opt(mu, cov, lam, iters=4000, w0=None):
+    """max wᵀμ − (λ/2) wᵀΣw, s.t. Σw=1, w≥0；投影梯度法"""
     n = len(mu)
-    w = np.ones(n) / n
-    L = lam * np.max(np.linalg.eigvalsh(cov)) + 1e-12
-    step = 1.0 / L
+    w = np.ones(n) / n if w0 is None else w0.copy()
+    step = 1.0 / (lam * np.max(np.linalg.eigvalsh(cov)) + 1e-12)
     for _ in range(iters):
-        grad = mu - lam * cov @ w
-        w_new = project_simplex(w + step * grad)
-        if np.max(np.abs(w_new - w)) < 1e-10:
+        w_new = project_simplex(w + step * (mu - lam * cov @ w))
+        if np.max(np.abs(w_new - w)) < 1e-9:
             w = w_new
             break
         w = w_new
-    w[w < 1e-6] = 0
+    w = np.where(w < 1e-6, 0, w)
     return w / w.sum()
 
 
 def parse_views(form, tickers):
-    """讀取表單中的投資人觀點；GET 時回傳預設觀點"""
     views = []
     for i, dv in enumerate(DEFAULT_VIEWS, start=1):
         if form is None:
             views.append(dict(dv))
             continue
-        try:
-            q = float(form.get(f"v{i}_q", dv['q']))
-        except ValueError:
-            q = dv['q']
-        try:
-            c = float(form.get(f"v{i}_c", dv['c']))
-        except ValueError:
-            c = dv['c']
+        q = fnum(form, f"v{i}_q", dv['q'])
+        c = fnum(form, f"v{i}_c", dv['c'])
         a = form.get(f"v{i}_a", dv['a'])
         b = form.get(f"v{i}_b", dv['b'])
         views.append({
@@ -493,27 +724,16 @@ def parse_views(form, tickers):
             'type': form.get(f"v{i}_type", dv['type']),
             'a': a if a in tickers else dv['a'],
             'b': b if b in tickers else dv['b'],
-            'q': q,
-            'c': min(max(c, 1), 100),
+            'q': q, 'c': min(max(c, 1), 100),
         })
     return views
 
 
 def black_litterman(cov, w_mkt, views, tickers, delta=DELTA_MKT, tau=TAU, rf=RF):
-    """
-    回傳：
-        pi      : 市場均衡超額報酬 (先驗)
-        mu_bl   : BL 後驗超額報酬
-        cov_bl  : BL 後驗共變異數矩陣
-        P, Q, Omega, view_table
-    """
     n = len(tickers)
     idx = {t: i for i, t in enumerate(tickers)}
-
-    # Step 1. 反向最佳化求均衡先驗報酬
     pi = delta * cov @ w_mkt
 
-    # Step 2. 建立觀點矩陣 P 與觀點向量 Q（皆以超額報酬表示）
     P_rows, Q_list, conf, view_table = [], [], [], []
     for v in views:
         if not v['on']:
@@ -537,38 +757,34 @@ def black_litterman(cov, w_mkt, views, tickers, delta=DELTA_MKT, tau=TAU, rf=RF)
 
     tau_cov = tau * cov
     if not P_rows:
-        return pi, pi.copy(), cov + tau_cov, None, None, None, view_table
+        return pi, pi.copy(), cov + tau_cov, view_table
 
     P = np.array(P_rows)
     Q = np.array(Q_list)
-
-    # Step 3. 由信心水準建立觀點不確定性 Ω (Walters / Idzorek 近似)
-    #   c → 100%：Ω → 0，完全相信觀點；c → 0%：Ω → ∞，忽略觀點
     c = np.clip(np.array(conf), 0.01, 0.999)
-    omega_diag = (1 - c) / c * np.diag(P @ tau_cov @ P.T)
-    omega_diag = np.maximum(omega_diag, 1e-10)
-    Omega = np.diag(omega_diag)
+    omega_diag = np.maximum((1 - c) / c * np.diag(P @ tau_cov @ P.T), 1e-10)
     for k, vt in enumerate(view_table):
         vt['omega'] = f"{omega_diag[k]:.6f}"
 
-    # Step 4. 貝氏更新求後驗分配
     inv_tau_cov = np.linalg.inv(tau_cov)
     inv_omega = np.diag(1 / omega_diag)
     M = np.linalg.inv(inv_tau_cov + P.T @ inv_omega @ P)
     mu_bl = M @ (inv_tau_cov @ pi + P.T @ inv_omega @ Q)
-    cov_bl = cov + M
-    return pi, mu_bl, cov_bl, P, Q, Omega, view_table
+    return pi, mu_bl, cov + M, view_table
 
 
-def efficient_frontier(mu, cov, n_points=35):
-    pts = []
-    for lam in np.logspace(-0.7, 2.3, n_points):
-        w = mean_variance_opt(mu, cov, lam, iters=2500)
+def efficient_frontier(mu, cov, n_points=25):
+    pts, w = [], None
+    for lam in np.logspace(2.3, -0.7, n_points):   # 由保守到積極，暖啟動加速
+        w = mean_variance_opt(mu, cov, lam, iters=2000, w0=w)
         pts.append((np.sqrt(w @ cov @ w), w @ mu))
     pts.sort()
     return np.array(pts)
 
 
+# ==========================================
+# 5. 績效、回測、蒙地卡羅、再平衡
+# ==========================================
 def perf_metrics(daily_ret, rf=RF):
     nav = (1 + daily_ret).cumprod()
     n = len(daily_ret)
@@ -577,20 +793,182 @@ def perf_metrics(daily_ret, rf=RF):
     vol = daily_ret.std() * np.sqrt(252)
     downside = daily_ret[daily_ret < 0].std() * np.sqrt(252)
     mdd = (nav / nav.cummax() - 1).min()
+    yearly = nav.groupby(nav.index.year).last()
+    yearly_ret = yearly.pct_change()
+    yearly_ret.iloc[0] = yearly.iloc[0] - 1
     return {
         'cum': cum, 'ann': ann, 'vol': vol,
         'sharpe': (ann - rf) / vol if vol > 0 else np.nan,
         'sortino': (ann - rf) / downside if downside > 0 else np.nan,
         'mdd': mdd, 'nav': nav,
+        'worst_year': yearly_ret.min(), 'worst_year_label': int(yearly_ret.idxmin()),
     }
+
+
+def simulate_portfolio(prices, div_yield, fx, w, initial_twd, monthly_twd,
+                       tax=0.30, fee_usd=3.0, fx_cost=0.001, costs=True, rebalance=True):
+    """
+    以新台幣投入、美元持有的每日模擬：
+      - 期初投入 initial_twd，每月第一個交易日投入 monthly_twd
+      - 換匯：扣匯差 fx_cost；每筆買賣扣固定手續費 fee_usd（每檔資產算一筆）
+      - 股利：除息日扣 tax 比例的預扣稅（還原價格已含息，故從總報酬中扣除）
+      - 每年第一個交易日再平衡回目標權重
+    """
+    w = np.where(w < 1e-4, 0, w)
+    w = w / w.sum()
+    held = w > 0
+    rets = prices.pct_change().fillna(0).values
+    dy = div_yield.values
+    fxv = fx.values
+    dates = prices.index
+
+    values = np.zeros(len(w))
+    principal = 0.0
+    fee_twd = fx_twd = tax_twd = 0.0
+    nav, prin = np.zeros(len(dates)), np.zeros(len(dates))
+
+    for t in range(len(dates)):
+        if t > 0:
+            if costs:
+                tax_amt = values * tax * dy[t]
+                tax_twd += tax_amt.sum() * fxv[t]
+                values = values * (1 + rets[t]) - tax_amt
+            else:
+                values = values * (1 + rets[t])
+        new_month = t == 0 or dates[t].month != dates[t - 1].month
+        cash = initial_twd if t == 0 else (monthly_twd if new_month else 0)
+        if cash > 0:
+            principal += cash
+            fxc = cash * fx_cost if costs else 0
+            fee = fee_usd * held.sum() if costs else 0
+            usd = max((cash - fxc) / fxv[t] - fee, 0)
+            values += usd * w
+            fx_twd += fxc
+            fee_twd += fee * fxv[t]
+        if rebalance and t > 0 and dates[t].year != dates[t - 1].year:
+            total = values.sum()
+            n_trades = int((np.abs(total * w - values) > 1).sum())
+            fee = fee_usd * n_trades if costs else 0
+            values = max(total - fee, 0) * w
+            fee_twd += fee * fxv[t]
+        nav[t] = values.sum() * fxv[t]
+        prin[t] = principal
+
+    return {
+        'nav': pd.Series(nav, index=dates), 'principal': pd.Series(prin, index=dates),
+        'fee_twd': fee_twd, 'fx_twd': fx_twd, 'tax_twd': tax_twd,
+    }
+
+
+def monte_carlo_goal(mu, sigma, initial_twd, monthly_twd, target_twd, years,
+                     fee_twd_per_month, fx_cost, n_sims=5000, seed=7):
+    """
+    月對數報酬 ~ N((μ − σ²/2)/12, σ²/12)。
+    終值 FV = A'·G_M + c'·Σ_k (G_M / G_k)，對每月投入 c 為線性 → 可直接反推所需月投入。
+    """
+    M = int(years * 12)
+    rng = np.random.default_rng(seed)
+    r = rng.normal((np.log1p(mu) - 0.5 * sigma ** 2) / 12, sigma / np.sqrt(12), size=(n_sims, M))
+    G = np.exp(np.cumsum(r, axis=1))                       # G_1..G_M
+    G_prev = np.hstack([np.ones((n_sims, 1)), G[:, :-1]])   # G_0..G_{M-1}
+    G_M = G[:, -1]
+    g1 = (G_M[:, None] / G_prev).sum(axis=1)
+
+    A = max(initial_twd * (1 - fx_cost) - fee_twd_per_month, 0) if initial_twd > 0 else 0
+    c_net = max(monthly_twd * (1 - fx_cost) - fee_twd_per_month, 0) if monthly_twd > 0 else 0
+    fv = A * G_M + c_net * g1
+
+    # 每月資產路徑 (第 10/50/90 百分位)
+    V = np.full(n_sims, A, dtype=float)
+    path = np.zeros((n_sims, M + 1))
+    path[:, 0] = V
+    for k in range(M):
+        V = (V + c_net) * np.exp(r[:, k])
+        path[:, k + 1] = V
+    pct_paths = np.percentile(path, [10, 50, 90], axis=0)
+
+    # 反推所需月投入：c' = (T − A·G_M)/g1，c = (c' + fee)/(1 − fx)
+    c_req = ((target_twd - A * G_M) / g1 + fee_twd_per_month) / (1 - fx_cost)
+    req = {p: max(np.percentile(c_req, p), 0) for p in (50, 75, 90)}
+    return {
+        'prob': float(np.mean(fv >= target_twd)), 'fv': fv,
+        'pct_paths': pct_paths, 'req': req, 'months': M,
+        'principal': initial_twd + monthly_twd * np.arange(M + 1),
+    }
+
+
+def rebalance_plan(holdings, w, tickers, contrib_usd, fee_usd):
+    cur = np.array([holdings.get(t, 0.0) for t in tickers])
+    total = cur.sum()
+    new_total = total + contrib_usd
+    target = new_total * w
+    deficit = np.maximum(target - cur, 0)
+
+    # 方案 A：依缺口比例分配本月資金
+    if deficit.sum() > 0:
+        buy_a = contrib_usd * deficit / deficit.sum() if deficit.sum() >= contrib_usd else deficit + (contrib_usd - deficit.sum()) * w
+    else:
+        buy_a = contrib_usd * w
+
+    # 方案 B：由缺口最大者開始集中補足，減少交易筆數
+    buy_b = np.zeros(len(w))
+    remain = contrib_usd
+    for i in np.argsort(-deficit):
+        if remain <= 0 or deficit[i] <= 0:
+            break
+        amt = min(deficit[i], remain)
+        buy_b[i] = amt
+        remain -= amt
+    if remain > 0:
+        buy_b += remain * w
+
+    after = (cur + buy_b) / new_total if new_total > 0 else w
+    n_a, n_b = int((buy_a > 0.5).sum()), int((buy_b > 0.5).sum())
+    notes = [
+        f"方案 A 需交易 {n_a} 筆，手續費約 {usd(n_a * fee_usd)}（占本月投入 {pct(n_a * fee_usd / contrib_usd if contrib_usd else 0, 1)}）；"
+        f"方案 B 只需 {n_b} 筆，手續費約 {usd(n_b * fee_usd)}（{pct(n_b * fee_usd / contrib_usd if contrib_usd else 0, 1)}）。",
+        "採「只買不賣」的方式再平衡：用新資金補足比例偏低的資產，不需賣出獲利部位，可避免額外手續費與實現損益。",
+    ]
+    small = [tickers[i] for i in range(len(w)) if 0.5 < buy_a[i] < fee_usd * 20]
+    if small:
+        notes.append(f"方案 A 中 {', '.join(small)} 的買入金額過小（手續費占比 > 5%），建議累積到下個月再一起買。")
+    drift = np.abs(cur / total - w).max() if total > 0 else 0
+    if drift > 0.05:
+        notes.append(f"目前最大偏離達 {pct(drift, 1)}，超過 5% 門檻，建議本月就執行再平衡。")
+
+    rows = [{
+        't': t, 'cur': usd(cur[i]), 'cur_w': pct(cur[i] / total if total else 0, 1), 'tgt_w': pct(w[i], 1),
+        'gap': f"{(target[i] - cur[i]):+,.0f}", 'buy_a': usd(buy_a[i]) if buy_a[i] > 0.5 else "—",
+        'buy_b': usd(buy_b[i]) if buy_b[i] > 0.5 else "—", 'after': pct(after[i], 1),
+    } for i, t in enumerate(tickers)]
+    return {'total': usd(total), 'contrib': usd(contrib_usd), 'rows': rows, 'notes': notes}
+
+
+# ==========================================
+# 6. 小工具
+# ==========================================
+def fnum(form, key, default):
+    try:
+        v = form.get(key, "")
+        return float(v) if str(v).strip() != "" else float(default)
+    except (ValueError, TypeError):
+        return float(default)
 
 
 def pct(x, d=2):
     return f"{x * 100:.{d}f}%"
 
 
+def twd(x):
+    return f"NT$ {x:,.0f}"
+
+
+def usd(x):
+    return f"US$ {x:,.0f}"
+
+
 # ==========================================
-# 5. 路由設定
+# 7. 路由設定
 # ==========================================
 last_bl_result = {}
 
@@ -598,8 +976,8 @@ last_bl_result = {}
 @app.route('/', methods=['GET', 'POST'])
 def index():
     if request.method == 'GET':
-        return render_template_string(HTML_TEMPLATE, show_results=False,
-                                      views=parse_views(None, TICKERS), tickers=TICKERS)
+        return render_template_string(HTML_TEMPLATE, show_results=False, views=parse_views(None, TICKERS),
+                                      tickers=TICKERS, plan=DEFAULT_PLAN, disclaimer=DISCLAIMER)
 
     try:
         # ---------- 1. KYC 計分 ----------
@@ -616,9 +994,7 @@ def index():
         else: baseline = "激進型"
 
         state, alert, logic_flag = analyze_nlp(d.get("q1", ""), d.get("q2", ""), d.get("q3", ""))
-        final_profile = baseline
-        if logic_flag == "保守":
-            final_profile = "保守型"
+        final_profile = "保守型" if logic_flag == "保守" else baseline
 
         if final_profile == "保守型":
             icon_color, stroke_dash = "#00BFFF", "33"
@@ -627,6 +1003,10 @@ def index():
         else:
             icon_color, stroke_dash = "#FF5252", "100"
         user_lambda = PROFILE_LAMBDA[final_profile]
+
+        plan = {k: fnum(d, k, v) for k, v in DEFAULT_PLAN.items()}
+        plan['years'] = int(min(max(plan['years'], 1), 40))
+        tax, fee_usd, fx_cost = plan['tax'] / 100, plan['fee'], plan['fxc'] / 100
 
         # ---------- 2. MPT (前次作業) ----------
         mpt = get_mpt_data()
@@ -645,32 +1025,28 @@ def index():
             fig1.add_trace(go.Scatter(
                 x=[data['risk']], y=[data['ret']], mode='markers+text',
                 marker=dict(color=colors[name], size=size, symbol=sym, line=dict(color='black', width=1)),
-                text=[name], textposition='top center',
-                textfont=dict(color=colors[name], size=14), name=name))
+                text=[name], textposition='top center', textfont=dict(color=colors[name], size=14), name=name))
         fig1.update_layout(margin=dict(l=20, r=20, t=20, b=20), height=400, showlegend=False,
                            xaxis_title="風險 (年化波動率)", yaxis_title="預期報酬率")
-        fig1_html = fig1.to_html(full_html=False, include_plotlyjs='cdn')
 
         fig2 = go.Figure()
         labels = ['保守型', '穩健型', '激進型']
         for i, ticker in enumerate(tickers):
             y_vals = [ports[label]['w'][i] * 100 for label in labels]
-            text_vals = [f"{ticker} {v:.1f}%" if v > 4 else "" for v in y_vals]
-            fig2.add_trace(go.Bar(name=ticker, x=labels, y=y_vals, text=text_vals, textposition='inside'))
+            fig2.add_trace(go.Bar(name=ticker, x=labels, y=y_vals,
+                                  text=[f"{ticker} {v:.1f}%" if v > 4 else "" for v in y_vals], textposition='inside'))
         fig2.update_layout(barmode='stack', margin=dict(l=20, r=20, t=20, b=20), height=350,
                            legend=dict(orientation="h", yanchor="bottom", y=-0.3, xanchor="center", x=0.5))
-        fig2_html = fig2.to_html(full_html=False, include_plotlyjs=False)
 
         # ---------- 3. Black–Litterman ----------
         cov = mpt['ann_cov']
-        mu_hist = mpt['ann_ret']                       # 歷史平均報酬 (總報酬)
+        mu_hist = mpt['ann_ret']
         cap = np.array([MARKET_CAP.get(t, 1) for t in tickers], dtype=float)
         w_mkt = cap / cap.sum()
 
         views = parse_views(d, tickers)
-        pi, mu_bl, cov_bl, P, Q, Omega, view_table = black_litterman(cov, w_mkt, views, tickers)
+        pi, mu_bl, cov_bl, view_table = black_litterman(cov, w_mkt, views, tickers)
 
-        # 最適權重：MVO 用歷史報酬 + 樣本共變異；BL 用後驗報酬 + 後驗共變異
         w_mvo = mean_variance_opt(mu_hist - RF, cov, user_lambda)
         w_bl = mean_variance_opt(mu_bl, cov_bl, user_lambda)
 
@@ -680,7 +1056,6 @@ def index():
             'diff': f"{(mu_bl[i] - pi[i]) * 100:+.2f}%",
         } for i, t in enumerate(tickers)]
 
-        # Figure 3. 報酬估計比較
         fig3 = go.Figure()
         fig3.add_trace(go.Bar(name='歷史平均報酬 (MVO)', x=tickers, y=mu_hist * 100, marker_color='#B0BEC5'))
         fig3.add_trace(go.Bar(name='均衡先驗 Π', x=tickers, y=(pi + RF) * 100, marker_color='#64B5F6'))
@@ -689,19 +1064,14 @@ def index():
                            title=dict(text="Figure 3. 預期報酬率估計比較 (%)", font=dict(size=14)),
                            yaxis_title="年化預期報酬 (%)",
                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        fig3_html = fig3.to_html(full_html=False, include_plotlyjs=False)
 
-        # Figure 4. 權重比較
         fig4 = go.Figure()
         for name, w, col in [('市值權重', w_mkt, '#90A4AE'), ('MVO', w_mvo, '#FF7043'), ('Black–Litterman', w_bl, '#1E3C72')]:
             fig4.add_trace(go.Bar(name=name, x=tickers, y=w * 100, marker_color=col,
                                   text=[f"{v * 100:.0f}" if v > 0.03 else "" for v in w], textposition='outside'))
-        fig4.update_layout(barmode='group', height=380, margin=dict(l=20, r=20, t=20, b=20),
-                           yaxis_title="權重 (%)",
+        fig4.update_layout(barmode='group', height=380, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="權重 (%)",
                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        fig4_html = fig4.to_html(full_html=False, include_plotlyjs=False)
 
-        # Figure 5. 效率前緣比較
         ef_mvo = efficient_frontier(mu_hist - RF, cov)
         ef_bl = efficient_frontier(mu_bl, cov_bl)
         fig5 = go.Figure()
@@ -715,17 +1085,14 @@ def index():
                                       mode='markers+text', text=[name], textposition='top left',
                                       marker=dict(size=16, symbol='star', color=col, line=dict(color='black', width=1)),
                                       showlegend=False))
-        w_m_vol = np.sqrt(w_mkt @ cov_bl @ w_mkt)
-        fig5.add_trace(go.Scatter(x=[w_m_vol * 100], y=[(w_mkt @ mu_bl + RF) * 100], mode='markers+text',
-                                  text=['市值組合'], textposition='bottom right',
+        fig5.add_trace(go.Scatter(x=[np.sqrt(w_mkt @ cov_bl @ w_mkt) * 100], y=[(w_mkt @ mu_bl + RF) * 100],
+                                  mode='markers+text', text=['市值組合'], textposition='bottom right',
                                   marker=dict(size=12, color='#90A4AE', line=dict(color='black', width=1)),
                                   showlegend=False))
         fig5.update_layout(height=380, margin=dict(l=20, r=20, t=20, b=20),
                            xaxis_title="年化波動率 (%)", yaxis_title="年化預期報酬 (%)",
                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-        fig5_html = fig5.to_html(full_html=False, include_plotlyjs=False)
 
-        # 配置差異摘要
         def alloc_row(name, w, mu_, cv):
             return {
                 'name': name, 'ret': pct(w @ mu_ + RF), 'vol': pct(np.sqrt(w @ cv @ w)),
@@ -733,19 +1100,16 @@ def index():
                 'n': int((w > 0.01).sum()), 'eff': f"{1 / np.sum(w ** 2):.2f}",
                 'dev': pct(np.sum(np.abs(w - w_mkt)) / 2, 1),
             }
-        alloc_table = [
-            alloc_row('市值權重 (均衡)', w_mkt, pi, cov),
-            alloc_row('MVO', w_mvo, mu_hist - RF, cov),
-            alloc_row('Black–Litterman', w_bl, mu_bl, cov_bl),
-        ]
+        alloc_table = [alloc_row('市值權重 (均衡)', w_mkt, pi, cov),
+                       alloc_row('MVO', w_mvo, mu_hist - RF, cov),
+                       alloc_row('Black–Litterman', w_bl, mu_bl, cov_bl)]
 
-        insights = []
-        insights.append(
+        insights = [
             f"MVO 直接使用歷史平均報酬，最大權重集中在 {tickers[int(np.argmax(w_mvo))]}（{pct(w_mvo.max(), 1)}），"
-            f"有效資產數僅 {1 / np.sum(w_mvo ** 2):.1f} 檔，反映出 MVO 對預期報酬估計誤差高度敏感、容易產生極端配置的問題。")
-        insights.append(
+            f"有效資產數僅 {1 / np.sum(w_mvo ** 2):.1f} 檔，反映出 MVO 對預期報酬估計誤差高度敏感、容易產生極端配置的問題。",
             f"Black–Litterman 以市場均衡為錨點，只在有觀點的資產上做偏離，有效資產數為 {1 / np.sum(w_bl ** 2):.1f} 檔，"
-            f"與市值權重的偏離度為 {pct(np.sum(np.abs(w_bl - w_mkt)) / 2, 1)}（MVO 為 {pct(np.sum(np.abs(w_mvo - w_mkt)) / 2, 1)}），配置較分散且直覺。")
+            f"與市值權重的偏離度為 {pct(np.sum(np.abs(w_bl - w_mkt)) / 2, 1)}（MVO 為 {pct(np.sum(np.abs(w_mvo - w_mkt)) / 2, 1)}），配置較分散且直覺。",
+        ]
         if view_table:
             moved = sorted(range(len(tickers)), key=lambda i: -abs(mu_bl[i] - pi[i]))[:3]
             insights.append("觀點對後驗報酬影響最大的資產：" + "、".join(
@@ -754,11 +1118,10 @@ def index():
         else:
             insights.append("未啟用任何觀點，BL 後驗報酬等於均衡先驗報酬，最適配置會接近市值權重（再依個人 λ 調整風險）。")
 
-        # ---------- 4. 樣本外績效回測 ----------
+        # ---------- 4. 樣本外績效 (Part 4) ----------
         test_price = mpt['test_price']
-        perf_table, fig6_html = [], "<p class='p-3 text-muted'>測試期無資料</p>"
+        perf_table, fig6 = [], None
         if len(test_price) > 5:
-            test_ret = test_price[tickers].pct_change().dropna()
             n = len(tickers)
             strategies = {
                 'Black–Litterman': (w_bl, '#1E3C72'),
@@ -769,46 +1132,288 @@ def index():
             }
             fig6 = go.Figure()
             for name, (w, col) in strategies.items():
-                # 買入持有：期初依權重配置，之後不再平衡
                 nav = (test_price[tickers] / test_price[tickers].iloc[0]) @ w
-                daily = nav.pct_change().dropna()
-                m = perf_metrics(daily)
-                perf_table.append({
-                    'name': name, 'cum': pct(m['cum']), 'ann': pct(m['ann']), 'vol': pct(m['vol']),
-                    'sharpe': f"{m['sharpe']:.2f}", 'sortino': f"{m['sortino']:.2f}", 'mdd': pct(m['mdd']),
-                })
+                m = perf_metrics(nav.pct_change().dropna())
+                perf_table.append({'name': name, 'cum': pct(m['cum']), 'ann': pct(m['ann']), 'vol': pct(m['vol']),
+                                   'sharpe': f"{m['sharpe']:.2f}", 'sortino': f"{m['sortino']:.2f}", 'mdd': pct(m['mdd'])})
                 fig6.add_trace(go.Scatter(x=nav.index, y=(nav - 1) * 100, mode='lines', name=name,
                                           line=dict(color=col, width=3 if name in ('Black–Litterman', 'MVO') else 1.8)))
-            fig6.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20),
-                               yaxis_title="累積報酬 (%)",
+            fig6.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="累積報酬 (%)",
                                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
-            fig6_html = fig6.to_html(full_html=False, include_plotlyjs=False)
 
-        # 儲存結果供 CSV 下載
+        # ---------- 5. 長期回測 vs VOO + 真實成本 (Part 5) ----------
+        prices, dyield, fx = mpt['all_price'][tickers], mpt['div_yield'][tickers], mpt['fx']
+        w_voo = np.array([1.0 if t == BENCHMARK else 0.0 for t in tickers])
+        init_twd, monthly_twd = plan['init_twd'], plan['monthly_twd']
+        lump = init_twd if init_twd > 0 else 1_000_000
+        sim_kw = dict(tax=tax, fee_usd=fee_usd, fx_cost=fx_cost)
+
+        bt_runs = [
+            ('推薦組合 BL（稅費後）', w_bl, True, '#1E3C72', 'solid'),
+            ('推薦組合 BL（稅費前）', w_bl, False, '#1E3C72', 'dot'),
+            ('MVO（稅費後）', w_mvo, True, '#FF7043', 'solid'),
+            ('VOO 單押（稅費後）', w_voo, True, '#2E7D32', 'solid'),
+        ]
+        fig7 = go.Figure()
+        bt_table, bt_m = [], {}
+        for name, w, costs, col, dash in bt_runs:
+            sim = simulate_portfolio(prices, dyield, fx, w, lump, 0, costs=costs, **sim_kw)
+            nav = sim['nav'] / sim['nav'].iloc[0]
+            m = perf_metrics(nav.pct_change().dropna())
+            bt_m[name] = m
+            bt_table.append({
+                'name': name, 'cum': pct(m['cum']), 'ann': pct(m['ann']), 'vol': pct(m['vol']),
+                'sharpe': f"{m['sharpe']:.2f}", 'mdd': pct(m['mdd']),
+                'worst': f"{pct(m['worst_year'], 1)} ({m['worst_year_label']})",
+                'loss': twd(lump * m['mdd']),
+            })
+            fig7.add_trace(go.Scatter(x=nav.index, y=(nav - 1) * 100, mode='lines', name=name,
+                                      line=dict(color=col, width=2.5, dash=dash)))
+        fig7.add_vrect(x0=TRAIN_START, x1=TRAIN_END, fillcolor="#90A4AE", opacity=0.12, line_width=0,
+                       annotation_text="模型估計期", annotation_position="top left")
+        fig7.update_layout(height=420, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="累積報酬 (%，新台幣)",
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+
+        m_net, m_gross, m_voo = bt_m['推薦組合 BL（稅費後）'], bt_m['推薦組合 BL（稅費前）'], bt_m['VOO 單押（稅費後）']
+        bt_notes = [
+            f"回測期間 {mpt['bt_period']}：推薦組合稅費後年化報酬 {pct(m_net['ann'])}，VOO 為 {pct(m_voo['ann'])}；"
+            f"最大回撤分別為 {pct(m_net['mdd'])} 與 {pct(m_voo['mdd'])}。"
+            + ("推薦組合的波動與回撤較小，風險調整後報酬 (Sharpe) " + ("較佳。" if m_net['sharpe'] > m_voo['sharpe'] else "仍不及 VOO。")
+               if m_net['mdd'] > m_voo['mdd'] else "推薦組合的回撤比 VOO 更深，需確認自己承受得住。"),
+            f"稅費拖累：同一組合稅費前年化 {pct(m_gross['ann'])}、稅費後 {pct(m_net['ann'])}，每年少了約 {pct(m_gross['ann'] - m_net['ann'])}。",
+            "注意：權重是用 2018–2023 資料估計的，回測期間包含估計期（灰色區塊），屬樣本內結果，可能高估實際表現；"
+            "2024 年之後才是真正的樣本外。所有報酬以新台幣計價，已反映匯率變動。",
+        ]
+
+        # 定期定額
+        fig8 = go.Figure()
+        dca = {}
+        for name, w, col in [('推薦組合 BL', w_bl, '#1E3C72'), ('VOO 單押', w_voo, '#2E7D32')]:
+            sim = simulate_portfolio(prices, dyield, fx, w, init_twd, monthly_twd, costs=True, **sim_kw)
+            dca[name] = sim
+            fig8.add_trace(go.Scatter(x=sim['nav'].index, y=sim['nav'], mode='lines', name=f"{name} 市值",
+                                      line=dict(color=col, width=2.5)))
+        fig8.add_trace(go.Scatter(x=dca['推薦組合 BL']['principal'].index, y=dca['推薦組合 BL']['principal'],
+                                  mode='lines', name='累積投入本金', line=dict(color='#9E9E9E', dash='dash')))
+        fig8.update_layout(height=400, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="新台幣",
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+
+        s = dca['推薦組合 BL']
+        final_v, princ = s['nav'].iloc[-1], s['principal'].iloc[-1]
+        n_hold = int((w_bl > 1e-4).sum())
+        fx_last = float(fx.iloc[-1])
+        div_drag = tax * float(w_bl @ mpt['ann_div_yield'])
+        fee_ratio = (n_hold * fee_usd * fx_last) / monthly_twd if monthly_twd > 0 else 0
+        total_cost = s['fee_twd'] + s['fx_twd'] + s['tax_twd']
+        cost_table = [
+            {'k': '累積投入本金', 'v': twd(princ)},
+            {'k': '期末市值（稅費後）', 'v': twd(final_v)},
+            {'k': 'VOO 單押期末市值（稅費後）', 'v': twd(dca['VOO 單押']['nav'].iloc[-1])},
+            {'k': '複委託手續費合計', 'v': twd(s['fee_twd'])},
+            {'k': '換匯成本合計', 'v': twd(s['fx_twd'])},
+            {'k': '股利預扣稅合計', 'v': twd(s['tax_twd'])},
+            {'k': '總成本占本金比例', 'v': pct(total_cost / princ if princ else 0)},
+            {'k': '每年股利稅拖累（估計）', 'v': pct(div_drag)},
+            {'k': f'每月手續費占投入比例（{n_hold} 檔 × US${fee_usd:g}）', 'v': pct(fee_ratio)},
+        ]
+        cost_tips = [f"美股現金股利預扣 {plan['tax']:g}% 稅，高股息與債券 ETF（如 TLT、VNQ、PG）受影響最大。"]
+        if fee_ratio > 0.01:
+            cost_tips.append(f"每月定投 {n_hold} 檔資產，固定手續費就吃掉投入金額的 {pct(fee_ratio, 1)}。"
+                             "建議改成每 2–3 個月買一次、每次只買 1–2 檔比例最低的資產（見 Part 7 方案 B），或選擇有定期定額優惠的券商。")
+        else:
+            cost_tips.append("目前手續費占投入比例在 1% 以內，成本控制良好。")
+        cost_tips.append("美國註冊 ETF 的股利預扣稅為 30%；部分愛爾蘭註冊的 UCITS ETF 在基金層級適用 15%，長期持有可評估。")
+
+        # ---------- 6. 蒙地卡羅目標試算 (Part 6) ----------
+        fee_twd_month = n_hold * fee_usd * fx_last
+        mu_port = float(w_bl @ (mu_bl + RF)) - div_drag
+        sig_port = float(np.sqrt(w_bl @ cov_bl @ w_bl))
+        mc_res = monte_carlo_goal(mu_port, sig_port, init_twd, monthly_twd, plan['target_twd'], plan['years'],
+                                  fee_twd_month, fx_cost)
+        i_voo = tickers.index(BENCHMARK)
+        mu_voo = float(mu_bl[i_voo] + RF) - tax * float(mpt['ann_div_yield'][i_voo])
+        mc_voo = monte_carlo_goal(mu_voo, float(np.sqrt(cov_bl[i_voo, i_voo])), init_twd, monthly_twd,
+                                  plan['target_twd'], plan['years'], fee_usd * fx_last, fx_cost)
+
+        mc = {
+            'prob': pct(mc_res['prob'], 1), 'prob_voo': pct(mc_voo['prob'], 1), 'years': plan['years'],
+            'median': twd(np.median(mc_res['fv'])), 'p10': twd(np.percentile(mc_res['fv'], 10)),
+            'mu': pct(mu_port), 'sigma': pct(sig_port),
+            'req': [{'p': f"{p}%", 'c': twd(v), 'diff': (f"+{twd(v - monthly_twd)}" if v > monthly_twd else "目前設定已足夠")}
+                    for p, v in mc_res['req'].items()],
+        }
+        months = np.arange(mc_res['months'] + 1)
+        x_dates = pd.Timestamp.today().normalize() + pd.to_timedelta(months * 30.44, unit='D')
+        p10, p50, p90 = mc_res['pct_paths']
+        fig9 = go.Figure()
+        fig9.add_trace(go.Scatter(x=x_dates, y=p90, mode='lines', line=dict(width=0), showlegend=False, hoverinfo='skip'))
+        fig9.add_trace(go.Scatter(x=x_dates, y=p10, mode='lines', line=dict(width=0), fill='tonexty',
+                                  fillcolor='rgba(41,121,255,0.18)', name='10%–90% 區間'))
+        fig9.add_trace(go.Scatter(x=x_dates, y=p50, mode='lines', name='中位數', line=dict(color='#1E3C72', width=3)))
+        fig9.add_trace(go.Scatter(x=x_dates, y=mc_res['principal'], mode='lines', name='投入本金',
+                                  line=dict(color='#9E9E9E', dash='dash')))
+        fig9.add_hline(y=plan['target_twd'], line=dict(color='#E53935', dash='dot'),
+                       annotation_text=f"目標 {twd(plan['target_twd'])}", annotation_position="top left")
+        fig9.update_layout(height=420, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="新台幣",
+                           legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+
+        # ---------- 7. 再平衡 (Part 7) ----------
+        holdings = {t: fnum(d, f"h_{t}", 0) for t in tickers}
+        rebal = None
+        if sum(holdings.values()) > 0:
+            contrib_usd = monthly_twd * (1 - fx_cost) / fx_last
+            rebal = rebalance_plan(holdings, w_bl, tickers, contrib_usd, fee_usd)
+
         last_bl_result['df'] = pd.DataFrame({
-            'ticker': tickers,
-            'market_weight': w_mkt,
-            'hist_mean_return': mu_hist,
-            'prior_return_pi_plus_rf': pi + RF,
-            'posterior_return_bl_plus_rf': mu_bl + RF,
-            'weight_mvo': w_mvo,
-            'weight_bl': w_bl,
+            'ticker': tickers, 'market_weight': w_mkt, 'hist_mean_return': mu_hist,
+            'prior_return_pi_plus_rf': pi + RF, 'posterior_return_bl_plus_rf': mu_bl + RF,
+            'weight_mvo': w_mvo, 'weight_bl': w_bl, 'annual_dividend_yield': mpt['ann_div_yield'],
         })
 
+        def html(fig, first=False):
+            return fig.to_html(full_html=False, include_plotlyjs=False) if fig is not None else \
+                "<p class='p-3 text-muted'>無資料</p>"
+
         return render_template_string(
-            HTML_TEMPLATE, show_results=True, baseline=baseline, state=state, alert=alert,
-            final_profile=final_profile, icon_color=icon_color, stroke_dash=stroke_dash,
-            user_lambda=user_lambda,
-            fig1_html=fig1_html, fig2_html=fig2_html, fig3_html=fig3_html,
-            fig4_html=fig4_html, fig5_html=fig5_html, fig6_html=fig6_html,
-            train_period=mpt['train_period'], test_period=mpt['test_period'],
+            HTML_TEMPLATE, show_results=True, disclaimer=DISCLAIMER,
+            baseline=baseline, state=state, alert=alert, final_profile=final_profile,
+            icon_color=icon_color, stroke_dash=stroke_dash, user_lambda=user_lambda,
+            fig1_html=html(fig1), fig2_html=html(fig2), fig3_html=html(fig3), fig4_html=html(fig4),
+            fig5_html=html(fig5), fig6_html=html(fig6), fig7_html=html(fig7), fig8_html=html(fig8),
+            fig9_html=html(fig9),
+            train_period=mpt['train_period'], test_period=mpt['test_period'], bt_period=mpt['bt_period'],
             delta=DELTA_MKT, tau=TAU, rf_pct=pct(RF, 1),
-            view_table=view_table, ret_table=ret_table, alloc_table=alloc_table,
-            insights=insights, perf_table=perf_table,
+            view_table=view_table, ret_table=ret_table, alloc_table=alloc_table, insights=insights,
+            perf_table=perf_table, bt_table=bt_table, bt_notes=bt_notes,
+            cost_table=cost_table, cost_tips=cost_tips, mc=mc, mc_n="5,000", rebal=rebal,
+            init_twd_fmt=twd(lump), monthly_twd_fmt=twd(monthly_twd), target_twd_fmt=twd(plan['target_twd']),
         )
 
     except Exception:
         return f"<h2>系統運算錯誤</h2><pre>{traceback.format_exc()}</pre>"
+
+
+# ==========================================
+# 8. 交易日誌分析
+# ==========================================
+SAMPLE_JOURNAL = """date,ticker,action,shares,price,fee
+2023-01-05,AAPL,BUY,10,126.00,3
+2023-03-10,MSFT,BUY,5,250.00,3
+2023-06-20,AAPL,SELL,10,184.00,3
+2023-08-01,TSLA,BUY,8,260.00,3
+2023-10-25,TSLA,SELL,8,212.00,3
+2024-01-15,MSFT,SELL,5,390.00,3
+2024-02-01,VOO,BUY,3,440.00,3
+"""
+
+
+def analyze_journal(df):
+    df.columns = [c.strip().lower() for c in df.columns]
+    need = {'date', 'ticker', 'action', 'shares', 'price'}
+    if not need.issubset(df.columns):
+        raise ValueError(f"CSV 缺少欄位：{', '.join(sorted(need - set(df.columns)))}")
+    if 'fee' not in df.columns:
+        df['fee'] = 0
+    df['date'] = pd.to_datetime(df['date'])
+    df['ticker'] = df['ticker'].astype(str).str.upper().str.strip()
+    df['action'] = df['action'].astype(str).str.upper().str.strip().replace({'買': 'BUY', '賣': 'SELL', '買進': 'BUY', '賣出': 'SELL'})
+    df[['shares', 'price', 'fee']] = df[['shares', 'price', 'fee']].apply(pd.to_numeric, errors='coerce').fillna(0)
+    df = df.sort_values('date', kind='stable')
+
+    lots, trades, warnings = {}, [], []
+    for _, r in df.iterrows():
+        if r['shares'] <= 0:
+            continue
+        if r['action'] == 'BUY':
+            lots.setdefault(r['ticker'], deque()).append([r['shares'], r['price'] + r['fee'] / r['shares'], r['date']])
+        elif r['action'] == 'SELL':
+            sell_px = r['price'] - r['fee'] / r['shares']
+            remain = r['shares']
+            q_lots = lots.get(r['ticker'], deque())
+            while remain > 1e-9 and q_lots:
+                lot = q_lots[0]
+                q = min(lot[0], remain)
+                trades.append({'ticker': r['ticker'], 'buy': lot[2], 'sell': r['date'], 'shares': q,
+                               'cost': lot[1], 'px': sell_px, 'pnl': q * (sell_px - lot[1]),
+                               'ret': sell_px / lot[1] - 1, 'days': (r['date'] - lot[2]).days})
+                lot[0] -= q
+                remain -= q
+                if lot[0] <= 1e-9:
+                    q_lots.popleft()
+            if remain > 1e-9:
+                warnings.append(f"{r['date']:%Y-%m-%d} 賣出 {r['ticker']} 超過持有股數 {remain:g} 股，已忽略超出部分。")
+        else:
+            warnings.append(f"無法辨識的交易方向：{r['action']}")
+    open_pos = {t: sum(l[0] for l in q) for t, q in lots.items() if sum(l[0] for l in q) > 1e-9}
+    return pd.DataFrame(trades), open_pos, warnings
+
+
+@app.route('/journal', methods=['GET', 'POST'])
+def journal():
+    ctx = dict(disclaimer=DISCLAIMER, stats=None, error=None, warnings=[], open_pos=None, trades=[])
+    if request.method == 'GET':
+        return render_template_string(JOURNAL_TEMPLATE, **ctx)
+    try:
+        f = request.files.get('file')
+        raw = f.read().decode('utf-8-sig')
+        tr, open_pos, warnings = analyze_journal(pd.read_csv(io.StringIO(raw)))
+        if tr.empty:
+            raise ValueError("沒有任何已平倉（買進後賣出）的交易可以分析。")
+
+        # 同期 VOO 報酬
+        start = (tr['buy'].min() - pd.Timedelta(days=10)).strftime('%Y-%m-%d')
+        end = (tr['sell'].max() + pd.Timedelta(days=5)).strftime('%Y-%m-%d')
+        try:
+            voo = yf.Ticker(BENCHMARK).history(start=start, end=end)['Close']
+            voo.index = voo.index.tz_localize(None)
+            tr['voo'] = [voo.asof(s) / voo.asof(b) - 1 for b, s in zip(tr['buy'], tr['sell'])]
+        except Exception:
+            tr['voo'] = np.nan
+            warnings.append("無法取得 VOO 歷史價格，略過同期比較。")
+
+        wins, losses = tr[tr['pnl'] > 0], tr[tr['pnl'] <= 0]
+        beat = (tr['ret'] > tr['voo']).mean() if tr['voo'].notna().any() else np.nan
+        pf = wins['pnl'].sum() / abs(losses['pnl'].sum()) if len(losses) and losses['pnl'].sum() != 0 else np.inf
+        stats = [
+            {'v': f"{len(tr)}", 'l': '已實現交易筆數'},
+            {'v': pct(len(wins) / len(tr), 1), 'l': '勝率'},
+            {'v': pct(wins['ret'].mean(), 1) if len(wins) else "—", 'l': '平均獲利（賺錢的交易）'},
+            {'v': pct(losses['ret'].mean(), 1) if len(losses) else "—", 'l': '平均虧損（賠錢的交易）'},
+            {'v': f"{pf:.2f}" if np.isfinite(pf) else "∞", 'l': '獲利因子（總獲利 / 總虧損）'},
+            {'v': f"{tr['days'].mean():.0f} 天", 'l': '平均持有天數'},
+            {'v': f"{tr['pnl'].sum():,.0f}", 'l': '已實現損益合計'},
+            {'v': pct(beat, 1) if pd.notna(beat) else "—", 'l': '跑贏同期 VOO 的比例'},
+        ]
+
+        labels = [f"{t} ({s:%Y/%m/%d})" for t, s in zip(tr['ticker'], tr['sell'])]
+        fig_a = go.Figure()
+        fig_a.add_trace(go.Bar(name='我的交易報酬', x=labels, y=tr['ret'] * 100,
+                               marker_color=['#2E7D32' if v > 0 else '#E53935' for v in tr['ret']]))
+        fig_a.add_trace(go.Bar(name='同期持有 VOO', x=labels, y=tr['voo'] * 100, marker_color='#90A4AE'))
+        fig_a.update_layout(barmode='group', height=380, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="報酬率 (%)",
+                            legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1))
+        cum = tr.sort_values('sell').assign(cum=lambda x: x['pnl'].cumsum())
+        fig_b = go.Figure(go.Scatter(x=cum['sell'], y=cum['cum'], mode='lines+markers', line=dict(color='#1E3C72', width=3)))
+        fig_b.update_layout(height=320, margin=dict(l=20, r=20, t=20, b=20), yaxis_title="累積已實現損益")
+
+        rows = [{
+            'ticker': r.ticker, 'buy': f"{r.buy:%Y-%m-%d}", 'sell': f"{r.sell:%Y-%m-%d}", 'shares': f"{r.shares:g}",
+            'cost': f"{r.cost:,.2f}", 'px': f"{r.px:,.2f}", 'pnl': f"{r.pnl:+,.0f}", 'ret': pct(r.ret, 1),
+            'voo': pct(r.voo, 1) if pd.notna(r.voo) else "—", 'days': r.days,
+        } for r in tr.itertuples()]
+        ctx.update(stats=stats, trades=rows, warnings=warnings,
+                   open_pos="、".join(f"{t} {s:g} 股" for t, s in open_pos.items()) or None,
+                   fig_a=fig_a.to_html(full_html=False, include_plotlyjs=False),
+                   fig_b=fig_b.to_html(full_html=False, include_plotlyjs=False))
+    except Exception as e:
+        ctx['error'] = f"分析失敗：{e}"
+    return render_template_string(JOURNAL_TEMPLATE, **ctx)
+
+
+@app.route('/journal/sample')
+def journal_sample():
+    return Response(SAMPLE_JOURNAL, mimetype="text/csv",
+                    headers={"Content-disposition": "attachment; filename=trade_journal_sample.csv"})
 
 
 @app.route('/download_csv')
